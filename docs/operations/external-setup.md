@@ -68,7 +68,14 @@ Store the resulting DSN as `CEREBRO_READ_REPLICA_URL`. Have the owner run a nega
 `CREATE`, `INSERT`, `UPDATE`, `DELETE`, and `SELECT ... FOR UPDATE` must fail. Do not grant
 default privileges to every future table; update the allowlist/grants deliberately.
 
-This is required for Slice 3, not Phase 0 or the fake Slack slice.
+Before enabling the worker, run `python -m cerebro.replica.check` with the production
+environment and DSN. Expected output is `replica-safe=true schema-compatible=true`.
+The local synthetic database is intentionally not a physical replica and therefore requires
+`CEREBRO_ALLOW_NON_REPLICA_READONLY_DB=true`; the application rejects that exception outside
+`local`/`test`.
+
+This access is required to activate Slice 3 against real data, but not for the fake Slack
+shell or the synthetic fixture profile.
 
 ## 4. PostHog
 

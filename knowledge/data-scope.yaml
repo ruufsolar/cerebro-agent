@@ -1,5 +1,6 @@
-version: 1
-last_reviewed: 2026-08-28
+version: 2
+schema_version: 2
+last_reviewed: 2026-09-01
 owner: finops
 purpose: payment identification only
 
@@ -11,48 +12,36 @@ candidate_defaults:
   installation_relevant: true
   preferred_currency: CLP
   supported_currencies: [CLP, USD, CLF]
-  outstanding_formula: account_receivable_amount - payments - losses
+  outstanding_formula: account_receivable_amount - active_same_currency_payments - active_same_currency_losses
 
-pii_allowed_for_internal_identification:
-  - rut
-  - bank_account
-  - phone
-  - email
-  - address
+pii_allowed_for_internal_identification: [rut, bank_account, phone, email, address]
 
 relations:
-  - name: user
-    reason: customer identity and relationships
-  - name: personal_details
-    reason: legal name and RUT matching
-  - name: contact_info
-    reason: phone and email correlation
-  - name: booking
-    reason: customer/order linkage and CRM orderId
-  - name: order
-    reason: commercial order context
-  - name: quote
-    reason: quoted sale and amount context
-  - name: house
-    reason: installation address matching against glosa
-  - name: commune
-    reason: normalize installation geography
-  - name: sale
-    reason: customer and payment-stage context
-  - name: solar_system_installation
-    reason: installation relevance/status
-  - name: account_receivable
-    reason: receivable amount, currency, parties, status, and due state
-  - name: account_receivable_payment
-    reason: registered abonos used in outstanding balance
-  - name: account_receivable_loss
-    reason: recognized losses used in outstanding balance
-  - name: account_receivable_installment
-    reason: installment/payment-stage context
-  - name: account_receivable_installment_type
-    reason: human-readable installment description
-  - name: vambe_message
-    reason: WhatsApp payment context and receipt mentions
+  - {name: user, reason: customer identity and relationships}
+  - {name: personal_details, reason: legal name and RUT matching}
+  - {name: contact_info, reason: phone and email correlation}
+  - {name: booking, reason: customer and order linkage}
+  - {name: order, reason: CRM orderId and commercial order context}
+  - {name: quote, reason: quoted property context}
+  - {name: house, reason: installation address matching against glosa}
+  - {name: commune, reason: normalized installation geography}
+  - {name: sale, reason: customer and payment-stage context}
+  - {name: solar_system_installation, reason: installation relevance and cancellation}
+  - {name: account_receivable, reason: receivable amount currency parties and status}
+  - {name: account_receivable_payment, reason: registered abonos used in outstanding balance}
+  - {name: account_receivable_loss, reason: recognized losses used in outstanding balance}
+  - {name: account_receivable_installment, reason: installment and payment-stage context}
+  - {name: account_receivable_installment_type, reason: human-readable installment description}
+  - {name: vambe_message, reason: WhatsApp payment context and receipt mentions}
+  - {name: bank_account, reason: legacy installation-linked customer bank details}
+  - {name: chile_bank_account, reason: normalized bank details when a reviewed bridge exists}
+  - {name: certification_user, reason: booking bridge for certification-user bank details}
+
+bank_account_policy:
+  decisive_alone: false
+  legacy_path: bank_account.solarSystemInstallationId -> solar_system_installation.id
+  normalized_path: certification_user.chileBankAccountId -> chile_bank_account.id
+  limitation: bank ownership is supporting identity evidence and does not prove who sent a deposit
 
 explicitly_unavailable:
   - source: generic_pagos_mailbox
@@ -64,12 +53,12 @@ query_limits:
   statement_timeout_seconds: 15
   max_rows: 200
   max_connections: 5
+  max_output_bytes: 65536
+  max_query_characters: 10000
   statements: [SELECT, WITH]
-  forbid:
-    - multiple_statements
-    - ddl
-    - dml
-    - procedures
-    - select_for_update
-    - copy
-    - unallowlisted_relations
+  vambe_default_days: 30
+  vambe_max_days: 90
+  vambe_max_messages: 50
+  schema_descriptions_per_call: 8
+  safe_functions: [abs, avg, btrim, cast, ceil, coalesce, concat, concat_ws, count, date_trunc, floor, greatest, immutable_unaccent, least, lower, max, min, nullif, regexp_replace, replace, round, similarity, sum, trim, upper]
+  forbid: [multiple_statements, ddl, dml, procedures, select_for_update, select_into, copy, recursive_cte, table_functions, catalog_access, cartesian_joins, select_star, unallowlisted_relations]

@@ -9,6 +9,8 @@ def test_config_is_safe_by_default() -> None:
     assert config.hold_writes_enabled is False
     assert config.external_tracing_enabled is False
     assert config.live_agent_ready is False
+    assert config.azure_agent_ready is False
+    assert config.azure_agent_partially_configured is False
     assert config.slack_ready is False
 
 
@@ -17,6 +19,19 @@ def test_slack_shell_readiness_only_requires_slack_tokens() -> None:
 
     assert config.slack_ready is True
     assert config.live_agent_ready is False
+
+
+def test_azure_readiness_requires_endpoint_key_and_deployment() -> None:
+    partial = AppConfig(azure_openai_endpoint="https://example.test")
+    ready = AppConfig(
+        azure_openai_endpoint="https://example.test",
+        azure_openai_api_key="secret",
+    )
+
+    assert partial.azure_agent_partially_configured is True
+    assert partial.azure_agent_ready is False
+    assert ready.azure_agent_partially_configured is False
+    assert ready.azure_agent_ready is True
 
 
 def test_database_driver_urls_are_derived() -> None:

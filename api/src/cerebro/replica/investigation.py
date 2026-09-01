@@ -1,0 +1,470 @@
+from datetime import UTC, datetime, time, timedelta
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+from unicodedata import combining, normalize
+from uuid import UUID
+
+from cerebro.agent.data_tools import (
+    InvestigationCandidate,
+    KnowledgeQuery,
+    PaymentCandidateQuery,
+    ReadonlySqlQuery,
+    SchemaQuery,
+    ToolAuditMetadata,
+    ToolObservation,
+    VambeQuery,
+    VerifyCandidateQuery,
+)
+from cerebro.replica.database import QueryResult, ReplicaDatabase
+from cerebro.replica.scope import KnowledgeBundle
+from cerebro.replica.sql_policy import SqlPolicyError, validate_readonly_sql
+
+_CANDIDATE_BASE = """
+WITH payment_aggregates AS (
+  SELECT p."accountReceivableId", p.currency,
+         COALESCE(SUM(p.amount) FILTER (WHERE p."deletedAt" IS NULL), 0) AS paid_amount
+  FROM account_receivable_payment p
+  GROUP BY p."accountReceivableId", p.currency
+),
+loss_aggregates AS (
+  SELECT l."accountReceivableId", l.currency,
+         COALESCE(SUM(l.amount) FILTER (WHERE l."deletedAt" IS NULL), 0) AS lost_amount
+  FROM account_receivable_loss l
+  GROUP BY l."accountReceivableId", l.currency
+),
+installment_aggregates AS (
+  SELECT i."accountReceivableId",
+         STRING_AGG(
+           CONCAT(t.name, ' ', ROUND(i.percentage * 100, 1), '%',
+             CASE WHEN i."disbursementDate" IS NULL THEN ''
+                  ELSE CONCAT(' (', i."disbursementDate"::date, ')') END),
+           ', ' ORDER BY i."disbursementDate" NULLS LAST, i."createdAt"
+         ) AS installment_summary
+  FROM account_receivable_installment i
+  JOIN account_receivable_installment_type t ON t.id = i."typeId"
+  GROUP BY i."accountReceivableId"
+),
+candidate_base AS (
+  SELECT
+    pd."firstName" || ' ' || pd."lastName" AS customer_name,
+    pd.rut AS customer_rut,
+    ci.email AS customer_email,
+    ci.phone AS customer_phone,
+    o.id AS order_id,
+    o."orderNumber" AS order_number,
+    ar.id AS account_receivable_id,
+    ar.type AS account_receivable_type,
+    ar.amount AS account_receivable_amount,
+    ar.currency,
+    GREATEST(
+      ar.amount - COALESCE(pa.paid_amount, 0) - COALESCE(la.lost_amount, 0), 0
+    ) AS outstanding_amount,
+    ia.installment_summary,
+    CONCAT_WS(' ', h."addressStreet", h."addressExternalNumber", h."addressInternalNumber", c.name)
+      AS full_address,
+    ba."fullName" AS legacy_bank_name,
+    ba.rut AS legacy_bank_rut,
+    ba."accountNumber" AS legacy_bank_account,
+    cba."fullName" AS normalized_bank_name,
+    cba.rut AS normalized_bank_rut,
+    cba."accountNumber" AS normalized_bank_account
+  FROM account_receivable ar
+  JOIN sale s ON s.id = ar."saleId"
+  JOIN booking b ON b.id = s."bookingId"
+  JOIN "order" o ON o.id = b."orderId"
+  JOIN personal_details pd ON pd."userId" = b."userId"
+  JOIN contact_info ci ON ci."userId" = b."userId"
+  JOIN house h ON h.id = o."houseId"
+  JOIN commune c ON c.id = h."communeId"
+  JOIN solar_system_installation ssi ON ssi."saleId" = s.id
+  LEFT JOIN payment_aggregates pa
+    ON pa."accountReceivableId" = ar.id AND pa.currency = ar.currency
+  LEFT JOIN loss_aggregates la
+    ON la."accountReceivableId" = ar.id AND la.currency = ar.currency
+  LEFT JOIN installment_aggregates ia ON ia."accountReceivableId" = ar.id
+  LEFT JOIN bank_account ba ON ba."solarSystemInstallationId" = ssi.id
+  LEFT JOIN certification_user cu ON cu."bookingId" = b.id
+  LEFT JOIN chile_bank_account cba ON cba.id = cu."chileBankAccountId"
+  WHERE ar."canceledAt" IS NULL
+    AND ar.debtor = 'client'
+    AND ar.recipient = 'ruuf'
+    AND ssi."canceledAt" IS NULL
+    AND GREATEST(
+      ar.amount - COALESCE(pa.paid_amount, 0) - COALESCE(la.lost_amount, 0), 0
+    ) > 0
+)
+SELECT * FROM candidate_base
+"""
+
+
+def _plain(value: str | None) -> str:
+    if not value:
+        return ""
+    decomposed = normalize("NFKD", value.casefold())
+    return "".join(character for character in decomposed if not combining(character))
+
+
+def _digits(value: str | None) -> str:
+    return "".join(character for character in value or "" if character.isdigit())
+
+
+def _decimal(value: object) -> Decimal:
+    return Decimal(str(value))
+
+
+def _candidate(
+    row: dict[str, object],
+    request: PaymentCandidateQuery | VerifyCandidateQuery,
+    *,
+    verified: bool,
+) -> InvestigationCandidate:
+    evidence: list[str] = []
+    contradictions: list[str] = []
+    address = str(row.get("full_address") or "")
+    customer_name = str(row["customer_name"])
+    outstanding = _decimal(row["outstanding_amount"])
+    outstanding_text = format(outstanding, "f")
+    currency = str(row["currency"])
+    requested_address = getattr(request, "glosa_or_address", None) or getattr(
+        request, "address", None
+    )
+    transferor = getattr(request, "transferor_name", None)
+    amount = getattr(request, "amount", None)
+    requested_currency = getattr(request, "currency", None) or "CLP"
+    if requested_address:
+        left, right = _plain(requested_address), _plain(address)
+        if left in right or right in left:
+            evidence.append(f"La glosa coincide con la dirección {address}.")
+        else:
+            contradictions.append("La glosa no coincide con la dirección registrada.")
+    if transferor:
+        normalized = _plain(transferor)
+        if normalized in _plain(customer_name) or _plain(customer_name) in normalized:
+            evidence.append("El nombre del transferente coincide con el cliente.")
+        elif any(
+            normalized in _plain(str(row.get(field) or ""))
+            for field in ("legacy_bank_name", "normalized_bank_name")
+        ):
+            evidence.append(
+                "El nombre coincide con una cuenta bancaria almacenada; es evidencia de apoyo."
+            )
+        else:
+            contradictions.append("El nombre del transferente no coincide con el cliente.")
+    if amount is not None:
+        if amount == outstanding and requested_currency == currency:
+            evidence.append(
+                f"El monto coincide exactamente con el saldo {outstanding_text} {currency}."
+            )
+        else:
+            contradictions.append(
+                f"El monto no coincide con el saldo pendiente {outstanding_text} {currency}."
+            )
+    if isinstance(request, PaymentCandidateQuery):
+        if request.transferor_rut:
+            rut = _digits(request.transferor_rut)
+            if rut and rut in {
+                _digits(str(row.get("customer_rut") or "")),
+                _digits(str(row.get("legacy_bank_rut") or "")),
+                _digits(str(row.get("normalized_bank_rut") or "")),
+            }:
+                evidence.append("El RUT coincide con identidad almacenada.")
+        if request.origin_account_number:
+            account = _digits(request.origin_account_number)
+            if account and account in {
+                _digits(str(row.get("legacy_bank_account") or "")),
+                _digits(str(row.get("normalized_bank_account") or "")),
+            }:
+                evidence.append("La cuenta de origen coincide con una cuenta almacenada de apoyo.")
+    installment = str(row.get("installment_summary") or "sin cuotas descritas")
+    ar_type = str(row["account_receivable_type"])
+    summary = f"{ar_type}; saldo pendiente {outstanding_text} {currency}; {installment}"
+    return InvestigationCandidate(
+        customer_name=customer_name,
+        order_id=UUID(str(row["order_id"])),
+        order_number=int(str(row["order_number"])),
+        account_receivable_id=UUID(str(row["account_receivable_id"])),
+        account_receivable_summary=summary,
+        outstanding_amount=outstanding,
+        currency=currency,
+        evidence=evidence,
+        contradictions=contradictions,
+        verified=verified,
+    )
+
+
+class ReplicaInvestigationData:
+    def __init__(
+        self,
+        database: ReplicaDatabase,
+        knowledge: KnowledgeBundle,
+        knowledge_dir: str | Path,
+    ) -> None:
+        self.database = database
+        self.knowledge = knowledge
+        self.knowledge_dir = Path(knowledge_dir)
+
+    async def start(self) -> None:
+        await self.database.start()
+
+    async def close(self) -> None:
+        await self.database.close()
+
+    async def read_finops_knowledge(self, request: KnowledgeQuery) -> ToolObservation:
+        if request.topic == "identification_policy":
+            summary = (self.knowledge_dir / "payment-identification-policy.md").read_text(
+                encoding="utf-8"
+            )
+        elif request.topic == "data_scope":
+            summary = f"Scope v{self.knowledge.scope.version}; relaciones permitidas: " + ", ".join(
+                sorted(self.knowledge.scope.relation_names)
+            )
+        else:
+            summary = "; ".join(
+                item["detail"] for item in self.knowledge.scope.explicitly_unavailable
+            )
+        return ToolObservation(source="finops_knowledge", available=True, summary=summary)
+
+    async def describe_database_tables(self, request: SchemaQuery) -> ToolObservation:
+        names = [name.lower() for name in request.names]
+        unknown = sorted(set(names) - self.knowledge.scope.relation_names)
+        if unknown:
+            return ToolObservation(
+                source="database_schema",
+                available=False,
+                summary="Una o más relaciones no están permitidas.",
+                limitations=[f"No permitidas: {', '.join(unknown)}"],
+            )
+        rows = [
+            {
+                "name": name,
+                **self.knowledge.catalog.relations[name].model_dump(mode="json"),
+            }
+            for name in names
+        ]
+        return ToolObservation(
+            source="database_schema",
+            available=True,
+            summary=f"Descripción de {len(rows)} relaciones permitidas.",
+            rows=rows,
+            audit=ToolAuditMetadata(row_count=len(rows), truncated=False),
+        )
+
+    async def search_payment_candidates(self, request: PaymentCandidateQuery) -> ToolObservation:
+        params: list[Any] = []
+
+        def parameter(value: Any) -> str:
+            params.append(value)
+            return f"${len(params)}"
+
+        matches: list[tuple[str, str]] = []
+        if request.glosa_or_address:
+            p = parameter(request.glosa_or_address)
+            matches.append(
+                (
+                    "address_match",
+                    "(immutable_unaccent(LOWER(full_address)) LIKE '%' || "
+                    f"immutable_unaccent(LOWER({p})) || '%' OR "
+                    f"immutable_unaccent(LOWER({p})) LIKE '%' || "
+                    "immutable_unaccent(LOWER(full_address)) || '%')",
+                )
+            )
+        if request.transferor_name:
+            p = parameter(request.transferor_name)
+            matches.append(
+                (
+                    "customer_name_match",
+                    "immutable_unaccent(LOWER(customer_name)) LIKE '%' || "
+                    f"immutable_unaccent(LOWER({p})) || '%'",
+                )
+            )
+            matches.append(
+                (
+                    "bank_name_match",
+                    "immutable_unaccent(LOWER(CONCAT_WS(' ', legacy_bank_name, "
+                    "normalized_bank_name))) LIKE '%' || "
+                    f"immutable_unaccent(LOWER({p})) || '%'",
+                )
+            )
+        if request.transferor_rut:
+            p = parameter(request.transferor_rut)
+            matches.append(
+                (
+                    "rut_match",
+                    "REGEXP_REPLACE(CONCAT_WS(' ', customer_rut, legacy_bank_rut, "
+                    "normalized_bank_rut), '[^0-9]', '', 'g') LIKE '%' || "
+                    f"REGEXP_REPLACE({p}, '[^0-9]', '', 'g') || '%'",
+                )
+            )
+        if request.origin_account_number:
+            p = parameter(request.origin_account_number)
+            matches.append(
+                (
+                    "bank_account_match",
+                    "REGEXP_REPLACE(CONCAT_WS(' ', legacy_bank_account, "
+                    "normalized_bank_account), '[^0-9]', '', 'g') LIKE '%' || "
+                    f"REGEXP_REPLACE({p}, '[^0-9]', '', 'g') || '%'",
+                )
+            )
+        if request.email:
+            p = parameter(request.email.lower())
+            matches.append(("email_match", f"LOWER(customer_email) = {p}"))
+        if request.phone:
+            p = parameter(request.phone)
+            matches.append(
+                (
+                    "phone_match",
+                    "REGEXP_REPLACE(customer_phone, '[^0-9]', '', 'g') = "
+                    f"REGEXP_REPLACE({p}, '[^0-9]', '', 'g')",
+                )
+            )
+        if request.amount is not None:
+            amount = parameter(request.amount)
+            currency = parameter(request.currency or "CLP")
+            expression = f"outstanding_amount = {amount}::numeric AND currency = {currency}"
+            matches.append(("amount_match", expression))
+        select_matches = ",\n".join(f"{expression} AS {name}" for name, expression in matches)
+        aliases = [name for name, _ in matches]
+        query = f"""
+        WITH base AS ({_CANDIDATE_BASE}), scored AS (
+          SELECT base.*, {select_matches} FROM base
+        )
+        SELECT customer_name, customer_rut, customer_email, customer_phone,
+               order_id, order_number, account_receivable_id, account_receivable_type,
+               account_receivable_amount, currency, outstanding_amount, installment_summary,
+               full_address, legacy_bank_name, legacy_bank_rut, legacy_bank_account,
+               normalized_bank_name, normalized_bank_rut, normalized_bank_account
+        FROM scored
+        WHERE {" OR ".join(aliases)}
+        ORDER BY {", ".join(f"{name} DESC" for name in aliases)}, order_number DESC
+        """
+        result = await self.database.fetch_bounded(query, *params, max_rows=20)
+        candidates = [_candidate(row, request, verified=False) for row in result.rows]
+        return ToolObservation(
+            source="payment_candidates",
+            available=True,
+            summary=f"Se encontraron {len(candidates)} candidatos elegibles.",
+            candidates=candidates,
+            limitations=["Las cuentas bancarias son evidencia de apoyo, no decisiva."],
+            audit=ToolAuditMetadata(row_count=result.row_count, truncated=result.truncated),
+        )
+
+    async def verify_payment_candidate(self, request: VerifyCandidateQuery) -> ToolObservation:
+        params: list[Any] = [request.order_id]
+        predicate = "order_id = $1"
+        if request.account_receivable_id:
+            params.append(request.account_receivable_id)
+            predicate += " AND account_receivable_id = $2"
+        result = await self.database.fetch_bounded(
+            f"WITH base AS ({_CANDIDATE_BASE}) SELECT * FROM base WHERE {predicate}",
+            *params,
+            max_rows=10,
+        )
+        candidates = [_candidate(row, request, verified=True) for row in result.rows]
+        return ToolObservation(
+            source="candidate_verification",
+            available=True,
+            summary=(
+                "Candidato verificado contra la réplica."
+                if candidates
+                else "La orden no tiene una cuenta por cobrar elegible."
+            ),
+            candidates=candidates,
+            audit=ToolAuditMetadata(row_count=result.row_count, truncated=result.truncated),
+        )
+
+    async def search_vambe_messages(self, request: VambeQuery) -> ToolObservation:
+        limits = self.knowledge.scope.query_limits
+        today = datetime.now(UTC).date()
+        start = request.start_date or today - timedelta(days=limits.vambe_default_days)
+        end = request.end_date or today
+        if end < start or (end - start).days > limits.vambe_max_days:
+            return ToolObservation(
+                source="vambe",
+                available=False,
+                summary="El rango solicitado no es válido.",
+                limitations=[f"Vambe permite como máximo {limits.vambe_max_days} días."],
+            )
+        user_id: str | None = None
+        phone = request.phone
+        if request.order_id:
+            identity = await self.database.fetch_bounded(
+                """
+                SELECT b."userId" AS user_id, ci.phone
+                FROM booking b
+                JOIN "order" o ON o.id = b."orderId"
+                JOIN contact_info ci ON ci."userId" = b."userId"
+                WHERE o.id = $1
+                """,
+                request.order_id,
+                max_rows=1,
+            )
+            if identity.rows:
+                user_id = str(identity.rows[0]["user_id"])
+                phone = phone or str(identity.rows[0]["phone"])
+        if user_id is None and not phone:
+            return ToolObservation(
+                source="vambe",
+                available=True,
+                summary="No se encontró identidad para acotar la búsqueda en Vambe.",
+                limitations=["No se ejecutó una búsqueda global de mensajes."],
+            )
+        params: list[Any] = [
+            user_id,
+            phone,
+            datetime.combine(start, time.min),
+            datetime.combine(end + timedelta(days=1), time.min),
+            request.query,
+        ]
+        result = await self.database.fetch_bounded(
+            """
+            SELECT id, "createdAt", direction, type,
+                   CASE WHEN type IN ('text', 'button', 'template')
+                        THEN content ELSE NULL END AS content,
+                   CASE WHEN type IN ('image', 'video', 'audio', 'document')
+                        THEN '[adjunto histórico no disponible]'
+                        ELSE NULL END AS attachment_limitation,
+                   "phoneNumber", status, "stageId", "senderId"
+            FROM vambe_message
+            WHERE (($1::uuid IS NOT NULL AND "userId" = $1::uuid)
+                   OR ($2::text IS NOT NULL AND "phoneNumber" = $2::text))
+              AND "createdAt" >= $3 AND "createdAt" < $4
+              AND ($5::text IS NULL OR content ILIKE '%' || $5::text || '%')
+            ORDER BY "createdAt" DESC
+            """,
+            *params,
+            max_rows=limits.vambe_max_messages,
+        )
+        return ToolObservation(
+            source="vambe",
+            available=True,
+            summary=f"Se encontraron {result.row_count} mensajes acotados al candidato.",
+            rows=list(result.rows),
+            limitations=["Los adjuntos históricos de Vambe no están disponibles."],
+            audit=ToolAuditMetadata(row_count=result.row_count, truncated=result.truncated),
+        )
+
+    async def run_readonly_sql(self, request: ReadonlySqlQuery) -> ToolObservation:
+        try:
+            validated = validate_readonly_sql(request.query, self.knowledge.scope)
+        except SqlPolicyError as exc:
+            return ToolObservation(
+                source="readonly_sql",
+                available=False,
+                summary="La consulta fue rechazada por la política de lectura.",
+                limitations=[str(exc)],
+            )
+        result: QueryResult = await self.database.run_validated(validated)
+        return ToolObservation(
+            source="readonly_sql",
+            available=True,
+            summary=f"Consulta de solo lectura: {result.row_count} filas.",
+            rows=list(result.rows),
+            limitations=["Resultado truncado al límite seguro."] if result.truncated else [],
+            audit=ToolAuditMetadata(
+                query_fingerprint=validated.fingerprint,
+                referenced_relations=list(validated.relations),
+                row_count=result.row_count,
+                truncated=result.truncated,
+            ),
+        )

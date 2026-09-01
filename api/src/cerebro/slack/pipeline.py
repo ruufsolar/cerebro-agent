@@ -1,3 +1,4 @@
+import json
 import logging
 from datetime import UTC, datetime
 from time import monotonic
@@ -6,9 +7,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
-from cerebro.agent.models import Confidence, PaymentIdentification
+from cerebro.agent.models import Confidence
 from cerebro.agent.runner import (
     AgentRunInput,
+    AgentRunResult,
     TranscriptAttachment,
     TranscriptMessage,
     get_agent_runner,
@@ -20,7 +22,7 @@ from cerebro.db.enums import (
     RunStatus,
     SlackOutputKind,
 )
-from cerebro.db.models import AgentRun, Conversation, Message, SlackOutput
+from cerebro.db.models import AgentRun, Conversation, Message, SlackOutput, ToolCall
 from cerebro.db.session import open_session
 from cerebro.jobs.enqueue import enqueue_slack_output
 from cerebro.slack.gateway import get_slack_gateway
@@ -28,17 +30,26 @@ from cerebro.slack.gateway import get_slack_gateway
 logger = logging.getLogger(__name__)
 
 
-def render_identification(result: PaymentIdentification) -> str:
+def render_identification(run_result: AgentRunResult) -> str:
+    result = run_result.identification
     confidence = {
         Confidence.HIGH: "alta",
         Confidence.MEDIUM: "media",
         Confidence.LOW: "baja",
         Confidence.UNKNOWN: "no sé",
     }[result.confidence]
-    lines = [
-        "🧪 *Respuesta de prueba — la investigación en datos reales aún no está habilitada.*",
-        f"*Confianza:* {confidence}",
-    ]
+    if run_result.prompt_version and "slice3" in run_result.prompt_version:
+        banner = "🧪 *Slice 3 — vista previa con datos reales; sin imágenes, correo ni escrituras.*"
+    elif run_result.prompt_version:
+        banner = (
+            "🧪 *Slice 2 — razonamiento en vivo; las fuentes reales de Ruuf "
+            "aún no están conectadas.*"
+        )
+    else:
+        banner = (
+            "🧪 *Respuesta de prueba — la investigación en datos reales aún no está habilitada.*"
+        )
+    lines = [banner, f"*Confianza:* {confidence}"]
     if result.recommended_customer:
         candidate = result.recommended_customer
         lines.append(f"*Cliente recomendado:* <{candidate.crm_url}|{candidate.customer_name}>")
@@ -46,14 +57,29 @@ def render_identification(result: PaymentIdentification) -> str:
         lines.append("*Cliente recomendado:* no encontré un cliente.")
     if result.account_receivable_summary:
         lines.append(f"*Cuenta por cobrar:* {result.account_receivable_summary}")
-    lines.append(
-        "No consulté el monolito, Vambe, correos ni la réplica en este slice; "
-        "por lo tanto no puedo verificar a quién corresponde el pago todavía."
-    )
+    lines.append(f"*Investigación:* {result.investigation_summary}")
+    if result.unable_to_verify:
+        lines.append(f"*No pude verificar:* {', '.join(result.unable_to_verify)}")
     if result.alternatives:
-        alternatives = ", ".join(candidate.customer_name for candidate in result.alternatives)
-        lines.append(f"*Alternativas:* {alternatives}")
+        lines.append("*Alternativas:*")
+        lines.extend(
+            f"• <{candidate.crm_url}|{candidate.customer_name}> — {candidate.reason}"
+            for candidate in result.alternatives
+        )
+    if result.confidence is Confidence.UNKNOWN:
+        lines.append("*Resultado:* no sé; FinOps debe revisar el pago manualmente.")
     return "\n".join(lines)
+
+
+def _bounded_json(
+    value: dict[str, object] | list[object] | None,
+) -> dict[str, object] | list[object] | None:
+    if value is None:
+        return None
+    encoded = json.dumps(value, ensure_ascii=False, default=str)
+    if len(encoded) <= 8_000:
+        return value
+    return {"truncated": True, "preview": encoded[:7_500]}
 
 
 def _attachments(metadata: list[dict[str, object]] | None) -> tuple[TranscriptAttachment, ...]:
@@ -155,7 +181,7 @@ async def execute_run(run_id: UUID) -> None:
     started = monotonic()
     try:
         result = await get_agent_runner().run(runner_input)
-        body = render_identification(result.identification)
+        body = render_identification(result)
         output_id: UUID | None = None
         async with open_session() as session:
             run = await session.get(AgentRun, run_id, with_for_update=True)
@@ -183,8 +209,21 @@ async def execute_run(run_id: UUID) -> None:
                 return
             run.status = RunStatus.SUCCEEDED
             run.structured_result = result.identification.model_dump(mode="json")
-            run.steps = result.steps
+            run.steps = [
+                *[step.model_dump(mode="json") for step in result.steps],
+                *[
+                    {
+                        "type": "tool_call",
+                        "name": call.tool_name,
+                        "status": call.status,
+                    }
+                    for call in result.tool_calls
+                ],
+            ]
             run.output_message = body
+            run.prompt_version = result.prompt_version
+            run.knowledge_version = result.knowledge_version
+            run.completion_reason = result.completion_reason
             run.model = result.usage.model
             run.input_tokens = result.usage.input_tokens
             run.output_tokens = result.usage.output_tokens
@@ -193,6 +232,25 @@ async def execute_run(run_id: UUID) -> None:
             run.latency_ms = int((monotonic() - started) * 1_000)
             run.finished_at = datetime.now(UTC)
             conversation.state = ConversationState.ANSWERED
+            session.add_all(
+                [
+                    ToolCall(
+                        agent_run_id=run.id,
+                        sequence=call.sequence,
+                        tool_name=call.tool_name,
+                        status=call.status,
+                        input=_bounded_json(call.input),
+                        output=_bounded_json(call.output),
+                        duration_ms=call.duration_ms,
+                        error=call.error[:2_000] if call.error else None,
+                        query_fingerprint=call.query_fingerprint,
+                        referenced_relations=call.referenced_relations or None,
+                        row_count=call.row_count,
+                        truncated=call.truncated,
+                    )
+                    for call in result.tool_calls
+                ]
+            )
             if posts_to_slack:
                 statement = (
                     insert(SlackOutput)

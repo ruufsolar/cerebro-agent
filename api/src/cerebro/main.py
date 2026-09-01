@@ -15,7 +15,7 @@ def create_app() -> FastAPI:
             "service": "cerebro-agent",
             "version": __version__,
             "environment": config.environment,
-            "phase": "slack-shell",
+            "phase": "replica-tools",
         }
 
     return app

@@ -3,7 +3,7 @@
 | Capability | State | Trigger | Reads | Effects | Human approval |
 |---|---|---|---|---|---|
 | Foundation health/state/jobs | Implemented | Process start / HTTP | Cerebro DB | Health response, durable jobs | No |
-| Payment identification V0 | Slack shell; fake investigation | Slack mention/follow-up | Stored thread transcript only | Same-thread fake Slack reply in review/apply | No business action |
+| Payment identification V0 | Preview; text + live replica tools, no screenshot bytes | Slack mention/follow-up | Stored transcript; allowed replica relations; candidate-scoped Vambe | Same-thread structured Slack reply in review/apply | No business action |
 | Reaction feedback | Implemented | 🧀 / 🔌 | Cerebro investigation outputs | Feedback row; flavor reply on 🔌 | No |
 | Automatic bank investigation | Future | New bank movement | Bank + same V0 reads | Proactive FinOps proposal | No business action |
 | Register AR payment | Future | Explicit FinOps approval | Candidate + AR state | Monolith write API | Required |

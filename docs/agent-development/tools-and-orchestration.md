@@ -37,6 +37,21 @@ Each integration has a protocol and fake. Slice 1 uses a fake investigator behin
 Slack; later slices can run the live investigator behind a fake Slack surface. This makes
 failures attributable and keeps tests offline.
 
+Slice 3 exposes six typed operations: `read_finops_knowledge`,
+`describe_database_tables`, `search_payment_candidates`, `verify_payment_candidate`,
+`search_vambe_messages`, and `run_readonly_sql`. The runtime selects the replica backend
+only when `CEREBRO_READ_REPLICA_URL` is present; otherwise it keeps the explicit unavailable
+backend. `FixtureInvestigationData` remains restricted to tests and opt-in synthetic evals.
+
+Candidate discovery is deliberately weaker than authorization. Application state records
+which exact `(order_id, account_receivable_id)` pairs were returned by
+`verify_payment_candidate`; final output is downgraded to `unknown` if the model recommends
+anything else. Raw SQL can investigate but cannot authorize a recommendation.
+
+Every invocation is budgeted, timed, and persisted in `tool_call`. SQL audit stores a
+fingerprint, referenced relations, duration, row count, and truncation—not raw SQL, rows,
+PII, or chain-of-thought.
+
 ## Read tools versus action tools
 
 Read tools may be selected autonomously inside the V0 budget. Action tools must instead

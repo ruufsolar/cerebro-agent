@@ -1,0 +1,62 @@
+version: 2
+source: monolith TypeORM entities reviewed 2026-09-01
+relations:
+  user:
+    description: Customer identity root; business fields live in personal_details and contact_info.
+    columns: {id: uuid, createdAt: timestamp, updatedAt: timestamp}
+  personal_details:
+    description: Customer legal identity.
+    columns: {id: uuid, userId: uuid, firstName: varchar, lastName: varchar, rut: varchar}
+  contact_info:
+    description: Customer contact data.
+    columns: {id: uuid, userId: uuid, email: varchar, phone: varchar}
+  booking:
+    description: Commercial opportunity joining customer, order, quote, and sale.
+    columns: {id: uuid, userId: uuid, orderId: uuid, quoteId: uuid, confirmedAt: timestamp, createdAt: timestamp}
+  order:
+    description: Human order number and the UUID used by the FinOps CRM route.
+    columns: {id: uuid, orderNumber: integer, houseId: uuid, userId: uuid}
+    gotchas: ['The table name is reserved and must be quoted in SQL.']
+  quote:
+    description: Quote and property link.
+    columns: {id: uuid, houseId: uuid, price: integer, acceptedAt: timestamp}
+  house:
+    description: Installation address.
+    columns: {id: uuid, communeId: uuid, addressStreet: varchar, addressExternalNumber: varchar, addressInternalNumber: varchar}
+  commune:
+    description: Municipality for an installation address.
+    columns: {id: uuid, name: varchar}
+  sale:
+    description: Sold booking owning receivables.
+    columns: {id: uuid, bookingId: uuid, createdAt: timestamp}
+  solar_system_installation:
+    description: Installation state for a sale.
+    columns: {id: uuid, saleId: uuid, canceledAt: timestamp, completedAt: timestamp}
+  account_receivable:
+    description: Money owed for a sale.
+    columns: {id: uuid, saleId: uuid, amount: numeric, currency: varchar, debtor: varchar, recipient: varchar, type: varchar, canceledAt: timestamp}
+    gotchas: ['Outstanding subtracts active same-currency payments and losses and is floored at zero.']
+  account_receivable_payment:
+    description: Payment registered against an account receivable.
+    columns: {id: uuid, accountReceivableId: uuid, amount: numeric, currency: varchar, deletedAt: timestamp, paymentDate: timestamp, comments: text}
+  account_receivable_loss:
+    description: Recognized loss against an account receivable.
+    columns: {id: uuid, accountReceivableId: uuid, amount: numeric, currency: varchar, deletedAt: timestamp, comments: text}
+  account_receivable_installment:
+    description: Scheduled percentage and disbursement date.
+    columns: {id: uuid, accountReceivableId: uuid, typeId: varchar, percentage: numeric, disbursementDate: timestamp, createdAt: timestamp}
+  account_receivable_installment_type:
+    description: Human-readable installment type.
+    columns: {id: varchar, name: varchar}
+  vambe_message:
+    description: Stored WhatsApp message context; attachment bytes are unavailable.
+    columns: {id: varchar, createdAt: timestamp, direction: enum, type: text, content: text, phoneNumber: text, channelPhoneNumber: text, userId: uuid, status: text, stageId: uuid, senderId: varchar}
+  bank_account:
+    description: Legacy bank account uploaded for an installation; weak corroborating evidence only.
+    columns: {id: uuid, solarSystemInstallationId: uuid, bank: enum, accountNumber: varchar, accountType: enum, fullName: varchar, rut: varchar, phone: varchar, email: varchar}
+  chile_bank_account:
+    description: Normalized bank details; only meaningful when reached through a reviewed bridge.
+    columns: {id: uuid, fullName: varchar, accountNumber: varchar, accountType: enum, rut: varchar, email: varchar, bank: enum}
+  certification_user:
+    description: Booking-linked certification identity and normalized bank-account bridge.
+    columns: {id: uuid, bookingId: uuid, chileBankAccountId: uuid, firstName: varchar, lastName: varchar, rut: varchar, phone: varchar, email: varchar}

@@ -40,22 +40,28 @@ The initial PII scope includes RUT, bank account, phone, email, and address beca
 be material identification evidence. It remains internal to FinOps and must not be emitted
 to PostHog or logs. Slack answers should use the minimum evidence necessary.
 
-## Structured tools planned
+## Implemented tools
 
 - `read_finops_knowledge(topic)`
 - `describe_database_tables(names)`
 - `search_payment_candidates(glosa, transferor, amount, currency, date)`
-- `search_vambe_messages(query, phone?, customer_id?, date_range?)`
+- `search_vambe_messages(query, phone?, order_id?, date_range?)`
 - `verify_payment_candidate(order_id, amount, transferor?, address?)`
 - `run_readonly_sql(query)`
 
 The first four heuristics stay in prompt/knowledge policy, while calculations such as
 outstanding balance should be deterministic SQL/tool output.
 
+The raw SQL validator uses SQLGlot's PostgreSQL AST, not a prefix/regular-expression check.
+It accepts only one query, resolves CTEs separately from physical relations, allowlists
+relations and functions, and rejects wildcard projections, writes, row locks, catalogs,
+recursive CTEs, table functions, and Cartesian joins. The database then wraps the query in
+a row limit and executes it inside a read-only transaction.
+
 ## Schema evolution
 
-Treat the replica schema as an external dependency. Each allowed table has a reason and
-required columns in the YAML scope. CI later validates the declared scope against a schema
-snapshot. A missing column fails the affected tool explicitly; the model must not infer a
-replacement. Stable, frequently used queries should graduate into monolith read APIs or
-read views.
+Treat the replica schema as an external dependency. Each allowed table has a reason in
+`knowledge/data-scope.yaml` and required columns in `knowledge/database-schema.yaml`.
+Worker startup validates both against the connected replica; a missing/incompatible column
+fails startup explicitly. The synthetic Compose profile exercises the same checks. Stable,
+frequently used queries should graduate into monolith read APIs or read views.

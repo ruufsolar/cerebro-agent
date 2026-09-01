@@ -96,6 +96,8 @@ class AgentRun(TimestampMixin, Base):
     structured_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     output_message: Mapped[str | None] = mapped_column(Text)
     prompt_version: Mapped[str | None] = mapped_column(Text)
+    knowledge_version: Mapped[str | None] = mapped_column(Text)
+    completion_reason: Mapped[str | None] = mapped_column(Text)
     model: Mapped[str | None] = mapped_column(Text)
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
@@ -126,6 +128,10 @@ class ToolCall(Base):
     output: Mapped[dict[str, Any] | list[Any] | None] = mapped_column(JSONB)
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     error: Mapped[str | None] = mapped_column(Text)
+    query_fingerprint: Mapped[str | None] = mapped_column(Text)
+    referenced_relations: Mapped[list[str] | None] = mapped_column(JSONB)
+    row_count: Mapped[int | None] = mapped_column(Integer)
+    truncated: Mapped[bool | None] = mapped_column(Boolean)
     created_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
 
     __table_args__ = (

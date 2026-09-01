@@ -29,3 +29,27 @@ and [OpenAI model/vision availability](https://developers.openai.com/api/docs/mo
 - Record deployment, token usage, latency, prompt version, and errors without input/output
   content in external telemetry.
 - Unit tests inject the fake and never require Azure credentials.
+
+## Implemented runtime behavior
+
+`OpenAIAgentsRunner` uses the main deployment, medium reasoning, Responses, disabled
+parallel tool calls, no response storage, and external tracing disabled. The application
+enforces an eight-turn, twenty-custom-tool, 4,096-output-token, and 180-second baseline.
+The custom-tool counter is application-owned rather than delegated to an API limit.
+
+Runner selection happens at worker startup:
+
+- endpoint + key + main deployment selects Azure;
+- no endpoint and no key selects the deterministic fake;
+- only one of endpoint/key fails startup instead of silently falling back.
+
+The endpoint may be the resource root or already end in `/openai/v1/`; Cerebro normalizes
+both forms. Set `CEREBRO_AZURE_OPENAI_USE_RESPONSES=false` only as a compatibility fallback.
+Reasoning/store settings that are specific to Responses are omitted in that mode.
+
+The runtime selects the Slice 3 replica backend only when
+`CEREBRO_READ_REPLICA_URL` is configured; otherwise every data operation explicitly reports
+unavailable and the model must abstain. Synthetic observations are confined to
+`cerebro.evals` and are never selected by the Slack worker. Even with replica data, the
+application accepts a recommended customer only when `verify_payment_candidate` returned
+that exact order/receivable pair in the same run.

@@ -1,12 +1,20 @@
-"""AgentRunner port; the concrete Agents SDK implementation is a later vertical slice."""
+"""AgentRunner port and process-local runner lifecycle."""
 
+import inspect
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Protocol
 from uuid import UUID
 
-from cerebro.agent.models import AgentUsage, Confidence, PaymentIdentification
+from cerebro.agent.models import (
+    AgentStep,
+    AgentUsage,
+    CompletionReason,
+    Confidence,
+    PaymentIdentification,
+    ToolAuditRecord,
+)
 
 
 @dataclass(frozen=True)
@@ -39,12 +47,20 @@ class AgentRunInput:
 @dataclass(frozen=True)
 class AgentRunResult:
     identification: PaymentIdentification
-    steps: list[dict[str, Any]] = field(default_factory=list)
+    steps: tuple[AgentStep, ...] = ()
     usage: AgentUsage = field(default_factory=AgentUsage)
+    prompt_version: str | None = None
+    knowledge_version: str | None = None
+    completion_reason: CompletionReason = CompletionReason.COMPLETED
+    tool_calls: tuple[ToolAuditRecord, ...] = ()
 
 
 class AgentRunner(Protocol):
+    async def start(self) -> None: ...
+
     async def run(self, run_input: AgentRunInput) -> AgentRunResult: ...
+
+    async def close(self) -> None: ...
 
 
 class FakeAgentRunner:
@@ -64,14 +80,49 @@ class FakeAgentRunner:
         self.calls.append(run_input)
         return self.result
 
+    async def start(self) -> None:
+        return None
 
-_runner: AgentRunner = FakeAgentRunner()
+    async def close(self) -> None:
+        return None
+
+
+_runner: AgentRunner | None = None
 
 
 def get_agent_runner() -> AgentRunner:
+    global _runner
+    if _runner is None:
+        from cerebro.agent.openai_runner import build_agent_runner
+
+        _runner = build_agent_runner()
     return _runner
 
 
-def set_agent_runner(runner: AgentRunner) -> None:
+def set_agent_runner(runner: AgentRunner | None) -> None:
     global _runner
     _runner = runner
+
+
+async def close_agent_runner() -> None:
+    global _runner
+    runner = _runner
+    _runner = None
+    if runner is None:
+        return
+    close = getattr(runner, "close", None)
+    if close is None:
+        return
+    result = close()
+    if inspect.isawaitable(result):
+        await result
+
+
+async def start_agent_runner() -> AgentRunner:
+    runner = get_agent_runner()
+    start = getattr(runner, "start", None)
+    if start is not None:
+        result = start()
+        if inspect.isawaitable(result):
+            await result
+    return runner

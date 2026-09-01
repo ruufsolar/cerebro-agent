@@ -26,6 +26,9 @@ class AppConfig(BaseSettings):
     log_level: str = "INFO"
     database_url: str = "postgresql://cerebro@127.0.0.1:5432/cerebro"
     read_replica_url: str = ""
+    allow_non_replica_readonly_db: bool = False
+    sql_max_connections: int = Field(default=5, ge=1, le=10)
+    sql_max_output_bytes: int = Field(default=65_536, ge=4_096, le=262_144)
 
     slack_bot_token: str = ""
     slack_app_token: str = ""
@@ -36,6 +39,8 @@ class AppConfig(BaseSettings):
     azure_deployment_main: str = "gpt-5-6-sol"
     azure_deployment_small: str = "gpt-5-6-luna"
     azure_openai_use_responses: bool = True
+    azure_reasoning_effort: str = "medium"
+    azure_max_output_tokens: int = Field(default=4_096, ge=256, le=32_768)
 
     global_mode: GlobalMode = GlobalMode.OFF
     payment_writes_enabled: bool = False
@@ -66,6 +71,10 @@ class AppConfig(BaseSettings):
         return self.database_url.replace("postgresql://", "postgresql+psycopg://", 1)
 
     @property
+    def replica_ready(self) -> bool:
+        return bool(self.read_replica_url)
+
+    @property
     def procrastinate_conninfo(self) -> str:
         return self.database_url
 
@@ -80,6 +89,17 @@ class AppConfig(BaseSettings):
                 self.read_replica_url,
             )
         )
+
+    @property
+    def azure_agent_ready(self) -> bool:
+        return bool(
+            self.azure_openai_endpoint and self.azure_openai_api_key and self.azure_deployment_main
+        )
+
+    @property
+    def azure_agent_partially_configured(self) -> bool:
+        values = (self.azure_openai_endpoint, self.azure_openai_api_key)
+        return any(values) and not all(values)
 
     @property
     def slack_ready(self) -> bool:

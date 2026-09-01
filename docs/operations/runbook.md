@@ -31,11 +31,39 @@ Disable live capability/global mode, preserve Slack acknowledgement, and return 
 temporary inability to investigate. Never change the DSN to a primary endpoint. Escalate to
 the database owner with SQL fingerprint/duration/error, not customer row data.
 
+Run the fail-closed preflight from the same image/environment as the worker:
+
+```bash
+cd /app/api
+python -m cerebro.replica.check
+```
+
+It verifies session read-only state, physical recovery, role flags/write privileges, and the
+versioned schema catalog. Do not set `CEREBRO_ALLOW_NON_REPLICA_READONLY_DB=true` in staging
+or production; the code refuses that exception outside local/test. A schema mismatch should
+be fixed by reviewing the catalog/query or by a deliberate monolith read view/API—not by
+removing the check or granting broader access.
+
+For a local-only reproduction with synthetic data:
+
+```bash
+docker compose -f deploy/compose.local.yml --profile replica up -d replica --wait
+```
+
+The fixture role has `SELECT` only and `default_transaction_read_only=on`.
+
 ## Azure errors/cost spike
 
 Turn `CEREBRO_GLOBAL_MODE=off`, check deployment name versus model ID, quota/rate limits,
 Responses support, and turn/tool counts. Do not enable external content tracing as a quick
 debugging shortcut.
+
+The worker intentionally refuses partial Azure configuration. Set both endpoint and API
+key, or leave both empty to use the deterministic fake. Timeout, turn/tool exhaustion,
+refusal, and invalid structured output are successful `unknown` investigations with a
+`completion_reason`; authentication, quota, provider, and networking failures are failed
+runs. Use the error category and Azure request metadata, never prompt/customer content, for
+diagnosis.
 
 ## Restore Cerebro state
 

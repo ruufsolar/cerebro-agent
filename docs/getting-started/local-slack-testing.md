@@ -1,11 +1,12 @@
 # Local Slack testing
 
-Slice 1 uses Slack Socket Mode: Cerebro opens an outbound WebSocket to Slack. You do not
+The Slack surface uses Socket Mode: Cerebro opens an outbound WebSocket to Slack. You do not
 need a public URL, port forwarding, ngrok, or Tailscale. Tailscale will become relevant only
 if a later slice reaches a private replica/network endpoint from your laptop.
 
-The response is deliberately fake. This test proves event routing, durability, threading,
-status, and feedback—not customer identification.
+With Azure credentials and a verified replica DSN, Slice 3 can investigate real text-based
+payment evidence. Without the replica, tools explicitly report unavailable. Without Azure,
+the deterministic fake runs even if a replica is configured. Screenshot bytes remain Slice 4.
 
 ## Before starting
 
@@ -31,7 +32,10 @@ status, and feedback—not customer identification.
    CEREBRO_GLOBAL_MODE=review
    ```
 
-Azure and replica credentials can remain empty in Slice 1.
+Azure and replica credentials can remain empty for Slack-shell testing. To test real model
+reasoning, set both Azure endpoint and API key; setting only one makes the worker fail fast.
+To test real data, also set the dedicated `CEREBRO_READ_REPLICA_URL`. Production/staging
+must point to a physical replica using SSL; never substitute the primary DSN.
 
 ## Start Cerebro
 
@@ -53,7 +57,7 @@ docker compose -f deploy/compose.local.yml --profile slack ps
 docker compose -f deploy/compose.local.yml --profile slack logs -f slack worker
 ```
 
-Health should report `"phase":"slack-shell"`; Slack logs should show a connected Socket
+Health should report `"phase":"replica-tools"`; Slack logs should show a connected Socket
 Mode session, and worker logs should show no failed jobs.
 
 ## Acceptance script
@@ -61,9 +65,10 @@ Mode session, and worker logs should show no failed jobs.
 1. Mention `@cerebro` in the invited channel with a Spanish payment-identification question.
    You may attach a PNG/JPEG screenshot.
 2. Confirm Cerebro shows native thread status and posts exactly one reply in that thread.
-3. Confirm the reply says it is a test response and that live data investigation is not
-   enabled. It must not claim a real customer match.
-4. Reply as a human in the same thread. Confirm a new fake investigation replies in that
+3. Without a replica, confirm it reports unavailable sources and returns `unknown`. With
+   Azure + replica, confirm any recommendation links to a CRM order returned by the
+   verification tool and includes the Slice 3 preview banner.
+4. Reply as a human in the same thread. Confirm a new investigation replies in that
    thread. A message in an unrelated thread must not trigger Cerebro.
 5. Add 🧀 to an investigation response. There should be no flavor reply.
 6. Add 🔌 to an investigation response. Cerebro should reply once with
@@ -75,8 +80,8 @@ Mode session, and worker logs should show no failed jobs.
 ## Mode checks
 
 - `off`: events are acknowledged and marked ignored; no conversation, run, status, or reply.
-- `shadow`: events/messages/runs are durable and the fake runner executes; no status/reply.
-- `review`: status and fake result are posted.
+- `shadow`: events/messages/runs are durable and the configured runner executes; no status/reply.
+- `review`: status and the structured result are posted.
 - `apply`: currently identical to `review`; it grants no business write capability.
 
 Restart the stack after changing `.env`. Keep `payment_writes_enabled` and
@@ -86,6 +91,14 @@ Restart the stack after changing `.env`. Keep `payment_writes_enabled` and
 
 - No event at all: verify Socket Mode, `xapp` token, app installation, channel invitation,
   event subscriptions, and that another consumer is not running.
+- Database is healthy but web reports `failed to resolve host 'db'`: recreate only the
+  Compose containers/network while preserving the database volume, then start again:
+
+  ```bash
+  docker compose -f deploy/compose.local.yml down --remove-orphans
+  docker compose -f deploy/compose.local.yml --profile slack up --build
+  ```
+
 - Event arrives but no answer: inspect worker logs and the `slack_event.disposition`,
   `agent_run.status`, and `slack_output.status` rows.
 - Duplicate-looking behavior: check for competing consumers first, then verify the Slack
@@ -93,7 +106,11 @@ Restart the stack after changing `.env`. Keep `payment_writes_enabled` and
 - Status API failure: the investigation should still finish. Check `assistant:write` and
   `chat:write` scopes before reinstalling.
 - Image appears ignored: only image MIME types within configured count/size limits are
-  retained as metadata. Slice 1 never downloads or reads the image.
+  retained as metadata. Slice 3 never downloads or reads the image.
+
+Do not paste the output of `docker compose config` into chat or tickets: Compose expands
+values from `.env`, including credentials. If a token appears in logs or shared diagnostic
+output, revoke it immediately and recreate every service after updating `.env`.
 
 Stop with `Ctrl-C`. Compose preserves the local PostgreSQL volume for restart testing. Use
 `docker compose -f deploy/compose.local.yml --profile slack down` to stop detached services.

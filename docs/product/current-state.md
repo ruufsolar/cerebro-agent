@@ -1,8 +1,8 @@
 # Current state
 
-Last updated: 2026-08-31.
+Last updated: 2026-09-01.
 
-## Completed: Phase 0 foundation and Slice 1 Slack shell
+## Completed: Phase 0 through Slice 3 replica investigation
 
 - Independent Python 3.13/`uv` project.
 - FastAPI health endpoint.
@@ -24,21 +24,42 @@ Last updated: 2026-08-31.
 - `off`, `shadow`, `review`, and pre-write `apply` mode gates.
 - 🧀/🔌 feedback, removal, and idempotent in-thread pain response.
 - Periodic recovery for event/run/output commit-to-enqueue gaps.
+- Azure OpenAI v1 adapter behind `AgentRunner`, using the Agents SDK and Responses by default.
+- Automatic real/fake runner selection with startup rejection of partial Azure credentials.
+- Structured model output, server-owned CRM URLs, and unsupported-candidate rejection.
+- Versioned production prompt and knowledge revision recorded on every real run.
+- Six typed read-only tools for FinOps knowledge, schema, candidates, verification, Vambe,
+  and long-tail SQL.
+- Dedicated asyncpg replica pool with read-only session settings, non-dangerous-role and
+  physical-replica verification, SSL enforcement outside local/test, and schema drift checks.
+- SQLGlot AST validation with one-statement, relation/function allowlists and rejection of
+  writes, locks, catalogs, recursive CTEs, table functions, Cartesian joins, and projections
+  using `SELECT *`.
+- Deterministic outstanding balance using active same-currency payments and losses; candidate
+  filtering excludes cancelled, fully paid, non-client, and non-Ruuf receivables.
+- Candidate-scoped Vambe lookup with 30-day default, 90-day maximum, and no attachment bytes.
+- Server-enforced final verification: discovery or raw SQL cannot authorize a recommendation.
+- Safe SQL/tool auditing by fingerprint, relations, timing, row count, truncation, and bounded
+  summaries; raw SQL, PII, and reasoning are not audit payloads.
+- Synthetic schema-compatible replica profile and opt-in end-to-end data integration test.
+- Configurable 8-turn, 20-tool, 180-second, and 4,096-output-token budgets.
+- Safe `unknown` outcomes for timeout, budget, refusal, and invalid structured output.
+- Durable bounded tool-call audit records without chain-of-thought.
+- Six-case synthetic eval corpus and opt-in Azure eval runner.
 
 ## Not connected
 
 - Screenshot download/validation/temporary cleanup.
-- OpenAI Agents SDK and Azure provider adapter.
-- Read-replica connection, SQL validator, or Vambe tools.
-- Live FinOps response renderer and PostHog emission.
+- PostHog emission and launch dashboards.
 - Any automatic bank trigger.
 - Any monolith write API.
 
 ## Next slice
 
-Slice 2 connects the OpenAI Agents SDK to Azure with fake tools. The Slack shell remains
-unchanged while the runner becomes a real, bounded model execution that still has no access
-to customer data.
+Slice 4 downloads and validates Slack screenshots into short-lived files and supplies them
+as multimodal model input. Until then, screenshot metadata is visible but image bytes are
+not investigated. Live Azure + production-replica acceptance remains pending on credentials
+and platform access; the complete data path is validated against the synthetic replica.
 
 ## Known facts from the reference systems
 

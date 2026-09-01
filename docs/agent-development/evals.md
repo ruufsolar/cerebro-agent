@@ -40,3 +40,20 @@ important regression.
 FinOps feedback creates candidates for new labeled cases; it does not directly train or
 rewrite Cerebro. Keep a small release-blocking suite and a larger diagnostic suite. Compare
 prompt/model/tool versions on the same cases before promotion.
+
+## Synthetic model harness
+
+`src/cerebro/evals/cases.yaml` contains six Slice 3 versioned, synthetic cases for address, name,
+amount ambiguity, difficult first payment, contradictory evidence, and prompt injection.
+
+```bash
+cd api
+uv run python -m cerebro.evals.run        # schema/corpus validation only
+uv run python -m cerebro.evals.run --live # Azure + synthetic fixture tools
+```
+
+The live command requires approved Azure credentials but never connects to Slack or real
+Ruuf data. It is opt-in and not part of CI.
+
+The separate `replica` Compose profile creates a schema-compatible PostgreSQL fixture and
+the integration test exercises the real deterministic tools. It does not call Azure or Slack.

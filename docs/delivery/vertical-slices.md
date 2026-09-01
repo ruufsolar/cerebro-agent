@@ -21,7 +21,7 @@ fakes, docs, CI, and deployment skeleton. No credentials or live integrations.
 Acceptance: a real installed-channel mention survives duplicate delivery and process restart,
 answers once in-thread, and records feedback.
 
-## Slice 2 — Agents SDK and Azure with fake tools
+## Slice 2 — Agents SDK and Azure with fake tools (implemented)
 
 - Concrete `AgentRunner` using OpenAI Agents SDK and Azure deployment.
 - Responses API, structured `PaymentIdentification`, Spanish renderer.
@@ -29,9 +29,10 @@ answers once in-thread, and records feedback.
 - Fake knowledge/data tools and representative model eval cases.
 
 Acceptance: real model reasoning produces contract-valid responses without real customer
-data; budget exhaustion and unknown outcomes are explicit.
+data; budget exhaustion and unknown outcomes are explicit. Live Azure acceptance remains
+pending until approved endpoint/key credentials are available.
 
-## Slice 3 — monolith replica and knowledge
+## Slice 3 — monolith replica and knowledge (implemented)
 
 - Dedicated read-only replica pool/credential.
 - Versioned `data-scope.yaml`, schema description, SQL AST/policy validation, read-only
@@ -44,8 +45,9 @@ If stable facts cannot be read safely or efficiently, this slice includes indepe
 mergeable monolith PRs for new **read** APIs/views and corresponding domain documentation.
 It does not include write APIs.
 
-Acceptance: synthetic and staging queries cannot mutate or escape the allowlist; candidate
-facts reconcile with manually checked FinOps cases.
+Acceptance: the synthetic replica proves role/schema checks, outstanding-balance search,
+candidate verification, candidate-scoped Vambe, and allowlisted raw SQL. Production/staging
+connection and FinOps case reconciliation remain rollout acceptance rather than code work.
 
 ## Slice 4 — screenshots
 

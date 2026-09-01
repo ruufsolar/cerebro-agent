@@ -3,9 +3,25 @@ from typing import Any
 import pytest
 from sqlalchemy import func, select
 
+from cerebro.agent.models import (
+    AgentUsage,
+    CompletionReason,
+    Confidence,
+    PaymentIdentification,
+    ToolAuditRecord,
+)
+from cerebro.agent.runner import AgentRunResult, FakeAgentRunner, set_agent_runner
 from cerebro.config import get_config
 from cerebro.db.enums import DeliveryStatus, RunStatus, SlackEventDisposition, SlackOutputKind
-from cerebro.db.models import AgentRun, Conversation, Feedback, Message, SlackEvent, SlackOutput
+from cerebro.db.models import (
+    AgentRun,
+    Conversation,
+    Feedback,
+    Message,
+    SlackEvent,
+    SlackOutput,
+    ToolCall,
+)
 from cerebro.db.session import open_session
 from cerebro.jobs.tasks import recover_pending_work
 from cerebro.slack.events import normalize_event
@@ -406,3 +422,55 @@ async def test_recovery_reenqueues_commit_to_job_gaps(
     assert [job["task_name"] for job in memory_jobs.jobs.values()] == [
         "cerebro.jobs.tasks.deliver_slack_output"
     ]
+
+
+async def test_agents_sdk_metadata_and_tool_audit_are_persisted(
+    clean_database: None,
+    memory_jobs: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del clean_database, memory_jobs
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "shadow")
+    get_config.cache_clear()
+    set_agent_runner(
+        FakeAgentRunner(
+            AgentRunResult(
+                identification=PaymentIdentification(
+                    confidence=Confidence.UNKNOWN,
+                    investigation_summary="Fuentes sintéticas sin coincidencias.",
+                ),
+                usage=AgentUsage(model="gpt-5-6-sol", input_tokens=100, output_tokens=20, turns=2),
+                prompt_version="payment-identification-slice3-v1",
+                knowledge_version="1",
+                completion_reason=CompletionReason.COMPLETED,
+                tool_calls=(
+                    ToolAuditRecord(
+                        sequence=1,
+                        tool_name="search_customer_identity",
+                        status="succeeded",
+                        input={"query": "María"},
+                        output={"available": False, "candidates": []},
+                        duration_ms=4,
+                    ),
+                ),
+            )
+        )
+    )
+    await store_and_process(message_envelope("Ev-audit"))
+    async with open_session() as session:
+        run_id = await session.scalar(select(AgentRun.id))
+    assert run_id is not None
+
+    await execute_run(run_id)
+
+    async with open_session() as session:
+        run = await session.get(AgentRun, run_id)
+        tool_call = await session.scalar(select(ToolCall))
+    assert run is not None
+    assert run.prompt_version == "payment-identification-slice3-v1"
+    assert run.knowledge_version == "1"
+    assert run.completion_reason == CompletionReason.COMPLETED
+    assert run.model == "gpt-5-6-sol"
+    assert tool_call is not None
+    assert tool_call.tool_name == "search_customer_identity"
+    assert tool_call.output == {"available": False, "candidates": []}

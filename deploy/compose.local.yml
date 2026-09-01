@@ -33,6 +33,8 @@ services:
         required: false
     environment:
       CEREBRO_DATABASE_URL: postgresql://cerebro:local-dev-only@db:5432/cerebro
+      CEREBRO_READ_REPLICA_URL: ${CEREBRO_READ_REPLICA_URL:-}
+      CEREBRO_ALLOW_NON_REPLICA_READONLY_DB: ${CEREBRO_ALLOW_NON_REPLICA_READONLY_DB:-false}
     depends_on:
       web:
         condition: service_healthy
@@ -67,5 +69,24 @@ services:
       timeout: 5s
       retries: 10
 
+  replica:
+    profiles: ["replica"]
+    image: postgres:18
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: local-fixture-only
+      POSTGRES_DB: monolith_fixture
+    ports:
+      - "5433:5432"
+    volumes:
+      - replica-pgdata:/var/lib/postgresql
+      - ../api/tests/fixtures/monolith_replica.sql:/docker-entrypoint-initdb.d/001-monolith.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d monolith_fixture"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
 volumes:
   pgdata:
+  replica-pgdata:
