@@ -1,0 +1,27 @@
+#!/bin/bash
+# One-time setup on the Wattson baseline VM. Run as root from a reviewed checkout.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if ! docker compose version >/dev/null 2>&1; then
+  echo "ERROR: Docker with the compose plugin is required" >&2
+  exit 1
+fi
+
+mkdir -p /etc/cerebro-agent /var/backups/cerebro-agent
+install -m 644 "$HERE/compose.yml" /etc/cerebro-agent/compose.yml
+install -m 755 "$HERE/cerebro-agent-update.sh" /usr/local/bin/cerebro-agent-update.sh
+install -m 755 "$HERE/cerebro-agent-backup.sh" /usr/local/bin/cerebro-agent-backup.sh
+
+[ -f /etc/cerebro-agent/env ] || install -m 600 "$HERE/env.example" /etc/cerebro-agent/env
+[ -f /etc/cerebro-agent/compose.env ] || \
+  install -m 600 "$HERE/compose.env.example" /etc/cerebro-agent/compose.env
+
+install -m 644 "$HERE"/systemd/cerebro-agent-*.service \
+  "$HERE"/systemd/cerebro-agent-*.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now cerebro-agent-update.timer cerebro-agent-backup.timer
+
+echo "Bootstrap complete. Fill /etc/cerebro-agent/env and compose.env, authenticate GHCR,"
+echo "then run /usr/local/bin/cerebro-agent-update.sh and curl localhost:8010/health."

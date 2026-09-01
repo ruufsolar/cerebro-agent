@@ -1,0 +1,16 @@
+.git
+.github
+.env
+.env.*
+!.env.example
+api/.venv
+api/.pytest_cache
+api/.ruff_cache
+api/.pyright
+api/**/__pycache__
+api/**/*.pyc
+docs
+deploy
+tmp
+*.dump
+*.sqlite*

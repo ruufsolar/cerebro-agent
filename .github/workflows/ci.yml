@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: cerebro
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: cerebro_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cerebro -d cerebro_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CEREBRO_DATABASE_URL: postgresql://cerebro@127.0.0.1:5432/cerebro_test
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          cache-dependency-glob: api/uv.lock
+      - run: uv sync --frozen
+      - run: uv run ruff check src tests
+      - run: uv run ruff format --check src tests
+      - run: uv run pyright src tests
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+      - run: uv run pytest -q
+
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate Compose
+        run: |
+          docker compose -f deploy/compose.local.yml --profile slack config
+          CEREBRO_ENV_FILE="$PWD/deploy/env.example" CEREBRO_DB_PASSWORD=test-only \
+            docker compose -f deploy/compose.yml config
+      - name: Build and health-check local stack
+        run: |
+          docker compose -f deploy/compose.local.yml up --build --wait
+          curl -fsS http://127.0.0.1:8000/health
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose -f deploy/compose.local.yml logs --no-color
+      - name: Stop local stack
+        if: always()
+        run: docker compose -f deploy/compose.local.yml down --volumes

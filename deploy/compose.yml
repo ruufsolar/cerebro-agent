@@ -1,0 +1,64 @@
+# Installed at /etc/cerebro-agent/compose.yml on the baseline VM.
+# /etc/cerebro-agent/env         -> container CEREBRO_* settings/secrets
+# /etc/cerebro-agent/compose.env -> interpolation only: DB password and image tag
+
+name: cerebro-agent
+
+services:
+  web:
+    image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
+    command: >
+      sh -c "cd /app/api && alembic upgrade head
+      && python -m cerebro.jobs.schema
+      && exec uvicorn cerebro.main:app --host 0.0.0.0 --port 8000
+      --proxy-headers --forwarded-allow-ips '*'"
+    env_file: ${CEREBRO_ENV_FILE:-/etc/cerebro-agent/env}
+    ports:
+      - "127.0.0.1:8010:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  worker:
+    image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
+    command: python -m cerebro.worker
+    env_file: ${CEREBRO_ENV_FILE:-/etc/cerebro-agent/env}
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+  slack:
+    image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
+    command: python -m cerebro.slack.socket
+    env_file: ${CEREBRO_ENV_FILE:-/etc/cerebro-agent/env}
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: cerebro
+      POSTGRES_PASSWORD: ${CEREBRO_DB_PASSWORD:?set CEREBRO_DB_PASSWORD in /etc/cerebro-agent/compose.env}
+      POSTGRES_DB: cerebro
+    volumes:
+      - pgdata:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:5434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cerebro -d cerebro"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:

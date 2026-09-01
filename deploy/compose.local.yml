@@ -1,0 +1,71 @@
+name: cerebro-agent-local
+
+services:
+  web:
+    build:
+      context: ..
+    command: >
+      sh -c "cd /app/api && alembic upgrade head
+      && python -m cerebro.jobs.schema
+      && exec uvicorn cerebro.main:app --host 0.0.0.0 --port 8000"
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      CEREBRO_DATABASE_URL: postgresql://cerebro:local-dev-only@db:5432/cerebro
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  worker:
+    build:
+      context: ..
+    command: python -m cerebro.worker
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      CEREBRO_DATABASE_URL: postgresql://cerebro:local-dev-only@db:5432/cerebro
+    depends_on:
+      web:
+        condition: service_healthy
+
+  slack:
+    profiles: ["slack"]
+    build:
+      context: ..
+    command: python -m cerebro.slack.socket
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      CEREBRO_DATABASE_URL: postgresql://cerebro:local-dev-only@db:5432/cerebro
+    depends_on:
+      web:
+        condition: service_healthy
+
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: cerebro
+      POSTGRES_PASSWORD: local-dev-only
+      POSTGRES_DB: cerebro
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cerebro -d cerebro"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:
