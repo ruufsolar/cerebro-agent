@@ -1,6 +1,7 @@
 """OpenAI Agents SDK runner backed by an Azure OpenAI v1 endpoint."""
 
 import asyncio
+import logging
 import os
 from dataclasses import dataclass, field
 from time import monotonic
@@ -42,7 +43,13 @@ from cerebro.agent.models import (
     ToolAuditRecord,
 )
 from cerebro.agent.prompt import TRANSCRIPT_LIMIT, load_prompt
-from cerebro.agent.runner import AgentRunInput, AgentRunner, AgentRunResult, FakeAgentRunner
+from cerebro.agent.runner import (
+    AgentRunFailure,
+    AgentRunInput,
+    AgentRunner,
+    AgentRunResult,
+    FakeAgentRunner,
+)
 from cerebro.config import AppConfig, get_config
 from cerebro.replica.database import ReplicaDatabase
 from cerebro.replica.investigation import ReplicaInvestigationData
@@ -51,6 +58,8 @@ from cerebro.replica.scope import load_knowledge
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_MODEL_DATA", "1")
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "1")
 set_tracing_disabled(True)
+
+logger = logging.getLogger(__name__)
 
 
 class ModelCandidate(BaseModel):
@@ -125,7 +134,15 @@ class RunState:
                     error=type(exc).__name__,
                 )
             )
-            raise
+            logger.warning("investigation tool %s unavailable: %s", name, type(exc).__name__)
+            return ToolObservation(
+                source=name,
+                available=False,
+                summary="La fuente de datos falló temporalmente durante esta investigación.",
+                limitations=[
+                    "La consulta no produjo evidencia; se debe reintentar o revisar manualmente."
+                ],
+            ).model_dump_json()
 
 
 def normalize_azure_base_url(endpoint: str) -> str:
@@ -353,6 +370,13 @@ class OpenAIAgentsRunner:
                 "El modelo no produjo una respuesta estructurada válida.",
                 CompletionReason.INVALID_OUTPUT,
             )
+        except Exception as exc:
+            raise AgentRunFailure(
+                f"agent provider/runtime failure: {type(exc).__name__}",
+                tool_calls=tuple(state.calls),
+                prompt_version=prompt_version,
+                knowledge_version=knowledge_version,
+            ) from exc
         else:
             try:
                 output = sdk_result.final_output_as(

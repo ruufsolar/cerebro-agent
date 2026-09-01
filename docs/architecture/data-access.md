@@ -36,6 +36,16 @@ check alone is insufficient.
 8. Audit normalized SQL fingerprint, referenced relations, duration, row count, and errors.
 9. Never place a primary/writer DSN in Cerebro configuration.
 
+Candidate discovery filters and ranks a bounded set before loading installment and bank
+enrichment. Payment and loss totals use receivable-scoped aggregates instead of scanning and
+grouping the complete history. Read-only serialization/recovery conflicts are retried twice in
+fresh transactions with short backoff; after that, the tool returns an explicit temporary-source
+limitation so Cerebro can abstain instead of failing the complete Slack run.
+
+Glosa matching checks the complete address first and can also use meaningful glosa tokens as
+customer-name evidence. Common payment/installment words are discarded. A name token is supporting
+evidence, not an exact-address match, and amount matching remains based on outstanding balance.
+
 The initial PII scope includes RUT, bank account, phone, email, and address because each can
 be material identification evidence. It remains internal to FinOps and must not be emitted
 to PostHog or logs. Slack answers should use the minimum evidence necessary.
@@ -57,6 +67,10 @@ It accepts only one query, resolves CTEs separately from physical relations, all
 relations and functions, and rejects wildcard projections, writes, row locks, catalogs,
 recursive CTEs, table functions, and Cartesian joins. The database then wraps the query in
 a row limit and executes it inside a read-only transaction.
+
+Tool audit records accumulated before a fatal provider/runtime failure are carried with the
+failure and persisted idempotently. Tool exceptions never include raw exception text or PII in the
+model observation or audit row.
 
 ## Schema evolution
 

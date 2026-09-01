@@ -1,4 +1,4 @@
-version: 2
+version: 3
 source: monolith TypeORM entities reviewed 2026-09-01
 relations:
   user:
@@ -50,7 +50,7 @@ relations:
     columns: {id: varchar, name: varchar}
   vambe_message:
     description: Stored WhatsApp message context; attachment bytes are unavailable.
-    columns: {id: varchar, createdAt: timestamp, direction: enum, type: text, content: text, phoneNumber: text, channelPhoneNumber: text, userId: uuid, status: text, stageId: uuid, senderId: varchar}
+    columns: {id: uuid, createdAt: timestamp, direction: enum, type: text, content: text, phoneNumber: text, channelPhoneNumber: text, userId: uuid, status: text, stageId: uuid, senderId: varchar}
   bank_account:
     description: Legacy bank account uploaded for an installation; weak corroborating evidence only.
     columns: {id: uuid, solarSystemInstallationId: uuid, bank: enum, accountNumber: varchar, accountType: enum, fullName: varchar, rut: varchar, phone: varchar, email: varchar}

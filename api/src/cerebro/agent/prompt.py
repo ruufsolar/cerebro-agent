@@ -6,7 +6,7 @@ import yaml
 
 from cerebro.config import AppConfig
 
-PROMPT_VERSION = "payment-identification-slice3-v1"
+PROMPT_VERSION = "payment-identification-slice3-v2"
 TRANSCRIPT_LIMIT = 30
 
 BASE_PROMPT = """
@@ -30,6 +30,10 @@ Reglas obligatorias:
   confianza alta.
 - Busca evidencia contradictoria además de evidencia favorable.
 - Razona sobre saldo pendiente y abonos, no solamente sobre el monto original.
+- Calibra confianza así: high requiere una glosa/dirección exacta verificada y sin
+  contradicciones materiales; sin glosa/dirección, coincidencias de nombre y/o monto no
+  pueden superar medium; low es sólo una pista útil pero incompleta; unknown significa que
+  no existe un candidato defendible.
 - No escribas datos, no registres pagos, no crees holds y no contactes clientes.
 - Si las fuentes no están disponibles o la evidencia es ambigua, responde unknown y deriva
   a revisión manual. Nunca adivines.

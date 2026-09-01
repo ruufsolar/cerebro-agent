@@ -1,3 +1,4 @@
+import json
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -31,6 +32,7 @@ from cerebro.agent.openai_runner import (
     normalize_azure_base_url,
 )
 from cerebro.agent.runner import (
+    AgentRunFailure,
     AgentRunInput,
     FakeAgentRunner,
     TranscriptAttachment,
@@ -61,6 +63,25 @@ def test_azure_url_and_automatic_backend_selection() -> None:
     assert isinstance(build_agent_runner(AppConfig()), FakeAgentRunner)
     with pytest.raises(ValueError, match="must be set together"):
         build_agent_runner(AppConfig(azure_openai_endpoint="https://example.test"))
+
+
+def test_tool_amount_schema_is_azure_compatible_and_runtime_value_is_decimal() -> None:
+    candidate_schema = PaymentCandidateQuery.model_json_schema()
+    verification_schema = VerifyCandidateQuery.model_json_schema()
+
+    assert candidate_schema["properties"]["amount"] == {
+        "anyOf": [{"type": "number"}, {"type": "null"}],
+        "default": None,
+        "title": "Amount",
+    }
+    assert verification_schema["properties"]["amount"] == {
+        "anyOf": [{"type": "number"}, {"type": "null"}],
+        "default": None,
+        "title": "Amount",
+    }
+    assert PaymentCandidateQuery.model_validate({"amount": 700000}).amount == Decimal("700000")
+    with pytest.raises(ValueError):
+        VerifyCandidateQuery.model_validate({"order_id": str(ORDER_UUID), "amount": 0})
 
 
 async def test_responses_default_and_chat_fallback_use_exact_deployment() -> None:
@@ -206,20 +227,22 @@ async def test_only_verification_tool_authorizes_a_recommendation() -> None:
     assert (ORDER_ID, RECEIVABLE_ID) in state.verified_candidates
 
 
-async def test_failed_tool_audit_omits_exception_content() -> None:
+async def test_failed_tool_becomes_unavailable_observation_and_safe_audit() -> None:
     state = RunState(max_tool_calls=1)
 
     async def fail(request: PaymentCandidateQuery) -> ToolObservation:
         del request
         raise ValueError("customer@example.test must not enter the audit row")
 
-    with pytest.raises(ValueError):
-        await state.invoke(
-            "search_payment_candidates",
-            PaymentCandidateQuery(email="customer@example.test"),
-            fail,
-        )
+    raw_observation = await state.invoke(
+        "search_payment_candidates",
+        PaymentCandidateQuery(email="customer@example.test"),
+        fail,
+    )
 
+    observation = json.loads(raw_observation)
+    assert observation["available"] is False
+    assert "customer@example.test" not in raw_observation
     assert state.calls[0].input == {"has_email": True}
     assert state.calls[0].error == "ValueError"
 
@@ -273,7 +296,7 @@ async def test_safe_sdk_outcomes_return_unknown(
         await runner.close()
     assert result.identification.confidence is Confidence.UNKNOWN
     assert result.completion_reason is reason
-    assert result.prompt_version == "payment-identification-slice3-v1"
+    assert result.prompt_version == "payment-identification-slice3-v2"
 
 
 async def test_success_records_usage_and_disables_sensitive_tracing(
@@ -357,7 +380,11 @@ async def test_provider_failures_propagate(monkeypatch: pytest.MonkeyPatch, tmp_
         client=AsyncOpenAI(api_key="test", base_url="https://example.test/v1/"),
     )
     try:
-        with pytest.raises(RuntimeError, match="provider unavailable"):
+        with pytest.raises(
+            AgentRunFailure, match="agent provider/runtime failure: RuntimeError"
+        ) as failure:
             await runner.run(make_input(()))
+        assert isinstance(failure.value.__cause__, RuntimeError)
+        assert str(failure.value.__cause__) == "provider unavailable"
     finally:
         await runner.close()

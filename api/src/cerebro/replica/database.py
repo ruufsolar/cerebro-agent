@@ -1,3 +1,4 @@
+import asyncio
 import json
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -226,8 +227,19 @@ class ReplicaDatabase:
         inner = query.rstrip(";")
         fetch_limit = configured_rows + 1
         wrapped = f"SELECT * FROM ({inner}) AS cerebro_bounded_query LIMIT {fetch_limit}"
-        async with pool.acquire() as connection, connection.transaction(readonly=True):
-            records = await connection.fetch(wrapped, *args)
+        records = None
+        for attempt in range(3):
+            try:
+                async with pool.acquire() as connection, connection.transaction(readonly=True):
+                    records = await connection.fetch(wrapped, *args)
+                break
+            except asyncpg.SerializationError:
+                if attempt == 2:
+                    raise
+                # A physical standby may cancel a reader so WAL replay can remove row
+                # versions. Retrying in a new transaction obtains a fresh snapshot.
+                await asyncio.sleep(0.1 * (2**attempt))
+        assert records is not None
         truncated = len(records) > configured_rows
         records = records[:configured_rows]
         columns = tuple(records[0].keys()) if records else ()

@@ -1,5 +1,5 @@
 version: 2
-schema_version: 2
+schema_version: 3
 last_reviewed: 2026-09-01
 owner: finops
 purpose: payment identification only

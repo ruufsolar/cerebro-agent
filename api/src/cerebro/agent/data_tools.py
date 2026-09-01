@@ -3,10 +3,16 @@
 from collections.abc import Mapping
 from datetime import date
 from decimal import Decimal
-from typing import Literal, Protocol
+from typing import Annotated, Literal, Protocol
 from uuid import UUID
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, WithJsonSchema, model_validator
+
+ToolDecimal = Annotated[
+    Decimal,
+    Field(gt=0),
+    WithJsonSchema({"type": "number"}),
+]
 
 
 class ToolAuditMetadata(BaseModel):
@@ -64,7 +70,7 @@ class PaymentCandidateQuery(BaseModel):
     origin_account_number: str | None = Field(default=None, max_length=80)
     email: str | None = Field(default=None, max_length=320)
     phone: str | None = Field(default=None, max_length=40)
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: ToolDecimal | None = None
     currency: Literal["CLP", "USD", "CLF"] | None = None
     payment_date: date | None = None
 
@@ -87,7 +93,7 @@ class PaymentCandidateQuery(BaseModel):
 class VerifyCandidateQuery(BaseModel):
     order_id: UUID
     account_receivable_id: UUID | None = None
-    amount: Decimal | None = Field(default=None, gt=0)
+    amount: ToolDecimal | None = None
     currency: Literal["CLP", "USD", "CLF"] | None = None
     transferor_name: str | None = Field(default=None, max_length=300)
     address: str | None = Field(default=None, max_length=500)

@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -20,32 +21,8 @@ from cerebro.replica.database import QueryResult, ReplicaDatabase
 from cerebro.replica.scope import KnowledgeBundle
 from cerebro.replica.sql_policy import SqlPolicyError, validate_readonly_sql
 
-_CANDIDATE_BASE = """
-WITH payment_aggregates AS (
-  SELECT p."accountReceivableId", p.currency,
-         COALESCE(SUM(p.amount) FILTER (WHERE p."deletedAt" IS NULL), 0) AS paid_amount
-  FROM account_receivable_payment p
-  GROUP BY p."accountReceivableId", p.currency
-),
-loss_aggregates AS (
-  SELECT l."accountReceivableId", l.currency,
-         COALESCE(SUM(l.amount) FILTER (WHERE l."deletedAt" IS NULL), 0) AS lost_amount
-  FROM account_receivable_loss l
-  GROUP BY l."accountReceivableId", l.currency
-),
-installment_aggregates AS (
-  SELECT i."accountReceivableId",
-         STRING_AGG(
-           CONCAT(t.name, ' ', ROUND(i.percentage * 100, 1), '%',
-             CASE WHEN i."disbursementDate" IS NULL THEN ''
-                  ELSE CONCAT(' (', i."disbursementDate"::date, ')') END),
-           ', ' ORDER BY i."disbursementDate" NULLS LAST, i."createdAt"
-         ) AS installment_summary
-  FROM account_receivable_installment i
-  JOIN account_receivable_installment_type t ON t.id = i."typeId"
-  GROUP BY i."accountReceivableId"
-),
-candidate_base AS (
+_CANDIDATE_CORE = """
+WITH candidate_core AS (
   SELECT
     pd."firstName" || ' ' || pd."lastName" AS customer_name,
     pd.rut AS customer_rut,
@@ -60,7 +37,6 @@ candidate_base AS (
     GREATEST(
       ar.amount - COALESCE(pa.paid_amount, 0) - COALESCE(la.lost_amount, 0), 0
     ) AS outstanding_amount,
-    ia.installment_summary,
     CONCAT_WS(' ', h."addressStreet", h."addressExternalNumber", h."addressInternalNumber", c.name)
       AS full_address,
     ba."fullName" AS legacy_bank_name,
@@ -77,24 +53,63 @@ candidate_base AS (
   JOIN contact_info ci ON ci."userId" = b."userId"
   JOIN house h ON h.id = o."houseId"
   JOIN commune c ON c.id = h."communeId"
-  JOIN solar_system_installation ssi ON ssi."saleId" = s.id
-  LEFT JOIN payment_aggregates pa
-    ON pa."accountReceivableId" = ar.id AND pa.currency = ar.currency
-  LEFT JOIN loss_aggregates la
-    ON la."accountReceivableId" = ar.id AND la.currency = ar.currency
-  LEFT JOIN installment_aggregates ia ON ia."accountReceivableId" = ar.id
-  LEFT JOIN bank_account ba ON ba."solarSystemInstallationId" = ssi.id
-  LEFT JOIN certification_user cu ON cu."bookingId" = b.id
-  LEFT JOIN chile_bank_account cba ON cba.id = cu."chileBankAccountId"
+  JOIN LATERAL (
+    SELECT installation.id
+    FROM solar_system_installation installation
+    WHERE installation."saleId" = s.id AND installation."canceledAt" IS NULL
+    LIMIT 1
+  ) ssi ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(p.amount), 0) AS paid_amount
+    FROM account_receivable_payment p
+    WHERE p."accountReceivableId" = ar.id
+      AND p.currency = ar.currency
+      AND p."deletedAt" IS NULL
+  ) pa ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT COALESCE(SUM(l.amount), 0) AS lost_amount
+    FROM account_receivable_loss l
+    WHERE l."accountReceivableId" = ar.id
+      AND l.currency = ar.currency
+      AND l."deletedAt" IS NULL
+  ) la ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT STRING_AGG(DISTINCT account."fullName", ' | ') AS "fullName",
+           STRING_AGG(DISTINCT account.rut, ' | ') AS rut,
+           STRING_AGG(DISTINCT account."accountNumber", ' | ') AS "accountNumber"
+    FROM bank_account account
+    WHERE account."solarSystemInstallationId" = ssi.id
+  ) ba ON TRUE
+  LEFT JOIN LATERAL (
+    SELECT STRING_AGG(DISTINCT account."fullName", ' | ') AS "fullName",
+           STRING_AGG(DISTINCT account.rut, ' | ') AS rut,
+           STRING_AGG(DISTINCT account."accountNumber", ' | ') AS "accountNumber"
+    FROM certification_user certification
+    JOIN chile_bank_account account ON account.id = certification."chileBankAccountId"
+    WHERE certification."bookingId" = b.id
+  ) cba ON TRUE
   WHERE ar."canceledAt" IS NULL
     AND ar.debtor = 'client'
     AND ar.recipient = 'ruuf'
-    AND ssi."canceledAt" IS NULL
     AND GREATEST(
       ar.amount - COALESCE(pa.paid_amount, 0) - COALESCE(la.lost_amount, 0), 0
     ) > 0
 )
-SELECT * FROM candidate_base
+SELECT * FROM candidate_core
+"""
+
+_INSTALLMENT_LATERAL = """
+LEFT JOIN LATERAL (
+  SELECT STRING_AGG(
+           CONCAT(t.name, ' ', ROUND(i.percentage * 100, 1), '%',
+             CASE WHEN i."disbursementDate" IS NULL THEN ''
+                  ELSE CONCAT(' (', i."disbursementDate"::date, ')') END),
+           ', ' ORDER BY i."disbursementDate" NULLS LAST, i."createdAt"
+         ) AS installment_summary
+  FROM account_receivable_installment i
+  JOIN account_receivable_installment_type t ON t.id = i."typeId"
+  WHERE i."accountReceivableId" = {source}.account_receivable_id
+) ia ON TRUE
 """
 
 
@@ -103,6 +118,27 @@ def _plain(value: str | None) -> str:
         return ""
     decomposed = normalize("NFKD", value.casefold())
     return "".join(character for character in decomposed if not combining(character))
+
+
+def _glosa_name_tokens(value: str | None) -> list[str]:
+    if not value:
+        return []
+    ignored = {
+        "abono",
+        "cliente",
+        "cuota",
+        "instalacion",
+        "pago",
+        "paneles",
+        "proyecto",
+        "ruuf",
+        "solar",
+        "transferencia",
+    }
+    tokens = re.findall(r"[a-z0-9]+", _plain(value))
+    return list(
+        dict.fromkeys(token for token in tokens if len(token) >= 4 and token not in ignored)
+    )[:8]
 
 
 def _digits(value: str | None) -> str:
@@ -134,10 +170,17 @@ def _candidate(
     requested_currency = getattr(request, "currency", None) or "CLP"
     if requested_address:
         left, right = _plain(requested_address), _plain(address)
+        name_tokens = set(_glosa_name_tokens(requested_address))
+        customer_tokens = set(_glosa_name_tokens(customer_name))
         if left in right or right in left:
             evidence.append(f"La glosa coincide con la dirección {address}.")
+        elif name_tokens & customer_tokens:
+            matched = ", ".join(sorted(name_tokens & customer_tokens))
+            evidence.append(f"La glosa contiene parte del nombre del cliente ({matched}).")
         else:
-            contradictions.append("La glosa no coincide con la dirección registrada.")
+            contradictions.append(
+                "La glosa no coincide con la dirección ni con el nombre del cliente."
+            )
     if transferor:
         normalized = _plain(transferor)
         if normalized in _plain(customer_name) or _plain(customer_name) in normalized:
@@ -269,6 +312,18 @@ class ReplicaInvestigationData:
                     "immutable_unaccent(LOWER(full_address)) || '%')",
                 )
             )
+            glosa_tokens = _glosa_name_tokens(request.glosa_or_address)
+            if glosa_tokens:
+                token_parameter = parameter(glosa_tokens)
+                matches.append(
+                    (
+                        "glosa_name_match",
+                        "EXISTS (SELECT 1 FROM UNNEST("
+                        f"{token_parameter}::text[]) AS token(value) WHERE "
+                        "immutable_unaccent(LOWER(customer_name)) LIKE '%' || "
+                        "immutable_unaccent(LOWER(token.value)) || '%')",
+                    )
+                )
         if request.transferor_name:
             p = parameter(request.transferor_name)
             matches.append(
@@ -325,18 +380,25 @@ class ReplicaInvestigationData:
             matches.append(("amount_match", expression))
         select_matches = ",\n".join(f"{expression} AS {name}" for name, expression in matches)
         aliases = [name for name, _ in matches]
+        ordering = ", ".join(f"{name} DESC" for name in aliases)
         query = f"""
-        WITH base AS ({_CANDIDATE_BASE}), scored AS (
-          SELECT base.*, {select_matches} FROM base
+        WITH eligible AS ({_CANDIDATE_CORE}), scored AS (
+          SELECT eligible.*, {select_matches} FROM eligible
+        ), matched AS (
+          SELECT * FROM scored
+          WHERE {" OR ".join(aliases)}
+          ORDER BY {ordering}, order_number DESC
+          LIMIT 20
         )
-        SELECT customer_name, customer_rut, customer_email, customer_phone,
+        SELECT matched.customer_name, matched.customer_rut, matched.customer_email,
+               matched.customer_phone,
                order_id, order_number, account_receivable_id, account_receivable_type,
                account_receivable_amount, currency, outstanding_amount, installment_summary,
                full_address, legacy_bank_name, legacy_bank_rut, legacy_bank_account,
                normalized_bank_name, normalized_bank_rut, normalized_bank_account
-        FROM scored
-        WHERE {" OR ".join(aliases)}
-        ORDER BY {", ".join(f"{name} DESC" for name in aliases)}, order_number DESC
+        FROM matched
+        {_INSTALLMENT_LATERAL.format(source="matched")}
+        ORDER BY {ordering}, order_number DESC
         """
         result = await self.database.fetch_bounded(query, *params, max_rows=20)
         candidates = [_candidate(row, request, verified=False) for row in result.rows]
@@ -356,7 +418,13 @@ class ReplicaInvestigationData:
             params.append(request.account_receivable_id)
             predicate += " AND account_receivable_id = $2"
         result = await self.database.fetch_bounded(
-            f"WITH base AS ({_CANDIDATE_BASE}) SELECT * FROM base WHERE {predicate}",
+            f"""
+            WITH eligible AS ({_CANDIDATE_CORE})
+            SELECT eligible.*, ia.installment_summary
+            FROM eligible
+            {_INSTALLMENT_LATERAL.format(source="eligible")}
+            WHERE {predicate}
+            """,
             *params,
             max_rows=10,
         )

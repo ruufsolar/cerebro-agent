@@ -40,9 +40,13 @@ no contactes clientes y no inventes. Si la evidencia no permite una conclusión 
 devuelve confianza unknown y dilo claramente. Responde mediante el esquema estructurado.
 ```
 
-The implemented prompt version is `payment-identification-slice3-v1`. It combines the
+The implemented prompt version is `payment-identification-slice3-v2`. It combines the
 agent contract in code with `knowledge/payment-identification-policy.md`; the version from
 `knowledge/data-scope.yaml` is persisted separately. Every customer recommendation must be
 backed by the exact order/receivable pair returned by `verify_payment_candidate` in the same
 run, or application code downgrades the result to `unknown`. Discovery and raw SQL are not
 sufficient authorization.
+
+Confidence is deliberately categorical and conservative: high requires an exact verified
+glosa/address match without material contradiction. Without glosa/address, name and/or
+amount evidence is capped at medium.

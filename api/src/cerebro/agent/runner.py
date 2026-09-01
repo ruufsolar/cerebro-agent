@@ -55,6 +55,23 @@ class AgentRunResult:
     tool_calls: tuple[ToolAuditRecord, ...] = ()
 
 
+class AgentRunFailure(RuntimeError):
+    """Fatal runner failure carrying the safe audit accumulated before it failed."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        tool_calls: tuple[ToolAuditRecord, ...] = (),
+        prompt_version: str | None = None,
+        knowledge_version: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.tool_calls = tool_calls
+        self.prompt_version = prompt_version
+        self.knowledge_version = knowledge_version
+
+
 class AgentRunner(Protocol):
     async def start(self) -> None: ...
 

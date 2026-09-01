@@ -6,9 +6,11 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from cerebro.agent.models import Confidence
+from cerebro.agent.models import Confidence, ToolAuditRecord
 from cerebro.agent.runner import (
+    AgentRunFailure,
     AgentRunInput,
     AgentRunResult,
     TranscriptAttachment,
@@ -28,6 +30,31 @@ from cerebro.jobs.enqueue import enqueue_slack_output
 from cerebro.slack.gateway import get_slack_gateway
 
 logger = logging.getLogger(__name__)
+
+
+async def _persist_tool_calls(
+    session: AsyncSession, run_id: UUID, calls: tuple[ToolAuditRecord, ...]
+) -> None:
+    for call in calls:
+        statement = (
+            insert(ToolCall)
+            .values(
+                agent_run_id=run_id,
+                sequence=call.sequence,
+                tool_name=call.tool_name,
+                status=call.status,
+                input=_bounded_json(call.input),
+                output=_bounded_json(call.output),
+                duration_ms=call.duration_ms,
+                error=call.error[:2_000] if call.error else None,
+                query_fingerprint=call.query_fingerprint,
+                referenced_relations=call.referenced_relations or None,
+                row_count=call.row_count,
+                truncated=call.truncated,
+            )
+            .on_conflict_do_nothing(index_elements=[ToolCall.agent_run_id, ToolCall.sequence])
+        )
+        await session.execute(statement)
 
 
 def render_identification(run_result: AgentRunResult) -> str:
@@ -232,25 +259,7 @@ async def execute_run(run_id: UUID) -> None:
             run.latency_ms = int((monotonic() - started) * 1_000)
             run.finished_at = datetime.now(UTC)
             conversation.state = ConversationState.ANSWERED
-            session.add_all(
-                [
-                    ToolCall(
-                        agent_run_id=run.id,
-                        sequence=call.sequence,
-                        tool_name=call.tool_name,
-                        status=call.status,
-                        input=_bounded_json(call.input),
-                        output=_bounded_json(call.output),
-                        duration_ms=call.duration_ms,
-                        error=call.error[:2_000] if call.error else None,
-                        query_fingerprint=call.query_fingerprint,
-                        referenced_relations=call.referenced_relations or None,
-                        row_count=call.row_count,
-                        truncated=call.truncated,
-                    )
-                    for call in result.tool_calls
-                ]
-            )
+            await _persist_tool_calls(session, run.id, result.tool_calls)
             if posts_to_slack:
                 statement = (
                     insert(SlackOutput)
@@ -277,6 +286,15 @@ async def execute_run(run_id: UUID) -> None:
         async with open_session() as session:
             run = await session.get(AgentRun, run_id, with_for_update=True)
             if run:
+                if isinstance(exc, AgentRunFailure):
+                    run.prompt_version = exc.prompt_version
+                    run.knowledge_version = exc.knowledge_version
+                    run.tool_calls = len(exc.tool_calls)
+                    run.steps = [
+                        {"type": "tool_call", "name": call.tool_name, "status": call.status}
+                        for call in exc.tool_calls
+                    ]
+                    await _persist_tool_calls(session, run.id, exc.tool_calls)
                 run.status = RunStatus.FAILED
                 run.error_code = "runner_error"
                 run.error_detail = str(exc)[:2_000]

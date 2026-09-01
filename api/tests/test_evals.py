@@ -3,7 +3,7 @@ from cerebro.evals.corpus import load_corpus
 
 def test_synthetic_eval_corpus_is_versioned_and_representative() -> None:
     corpus = load_corpus()
-    assert corpus.version == "slice3-v1"
+    assert corpus.version == "slice3-v2"
     assert len(corpus.cases) >= 6
     assert {case.id for case in corpus.cases} >= {
         "address_glosa_match",

@@ -29,8 +29,8 @@ answers once in-thread, and records feedback.
 - Fake knowledge/data tools and representative model eval cases.
 
 Acceptance: real model reasoning produces contract-valid responses without real customer
-data; budget exhaustion and unknown outcomes are explicit. Live Azure acceptance remains
-pending until approved endpoint/key credentials are available.
+data; budget exhaustion and unknown outcomes are explicit. Live Azure Responses acceptance
+and the six-case synthetic tool evaluation passed with the approved credentials.
 
 ## Slice 3 — monolith replica and knowledge (implemented)
 

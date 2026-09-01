@@ -10,7 +10,13 @@ from cerebro.agent.models import (
     PaymentIdentification,
     ToolAuditRecord,
 )
-from cerebro.agent.runner import AgentRunResult, FakeAgentRunner, set_agent_runner
+from cerebro.agent.runner import (
+    AgentRunFailure,
+    AgentRunInput,
+    AgentRunResult,
+    FakeAgentRunner,
+    set_agent_runner,
+)
 from cerebro.config import get_config
 from cerebro.db.enums import DeliveryStatus, RunStatus, SlackEventDisposition, SlackOutputKind
 from cerebro.db.models import (
@@ -440,7 +446,7 @@ async def test_agents_sdk_metadata_and_tool_audit_are_persisted(
                     investigation_summary="Fuentes sintéticas sin coincidencias.",
                 ),
                 usage=AgentUsage(model="gpt-5-6-sol", input_tokens=100, output_tokens=20, turns=2),
-                prompt_version="payment-identification-slice3-v1",
+                prompt_version="payment-identification-slice3-v2",
                 knowledge_version="1",
                 completion_reason=CompletionReason.COMPLETED,
                 tool_calls=(
@@ -467,10 +473,63 @@ async def test_agents_sdk_metadata_and_tool_audit_are_persisted(
         run = await session.get(AgentRun, run_id)
         tool_call = await session.scalar(select(ToolCall))
     assert run is not None
-    assert run.prompt_version == "payment-identification-slice3-v1"
+    assert run.prompt_version == "payment-identification-slice3-v2"
     assert run.knowledge_version == "1"
     assert run.completion_reason == CompletionReason.COMPLETED
     assert run.model == "gpt-5-6-sol"
     assert tool_call is not None
     assert tool_call.tool_name == "search_customer_identity"
     assert tool_call.output == {"available": False, "candidates": []}
+
+
+async def test_failed_runner_persists_partial_tool_audit(
+    clean_database: None,
+    memory_jobs: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del clean_database, memory_jobs
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "shadow")
+    get_config.cache_clear()
+
+    class AuditedFailureRunner:
+        async def start(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+        async def run(self, run_input: AgentRunInput) -> AgentRunResult:
+            del run_input
+            raise AgentRunFailure(
+                "agent provider/runtime failure: APIConnectionError",
+                prompt_version="payment-identification-slice3-v2",
+                knowledge_version="1",
+                tool_calls=(
+                    ToolAuditRecord(
+                        sequence=1,
+                        tool_name="search_payment_candidates",
+                        status="failed",
+                        input={"has_amount": True},
+                        error="SerializationError",
+                    ),
+                ),
+            )
+
+    set_agent_runner(AuditedFailureRunner())
+    await store_and_process(message_envelope("Ev-failed-audit"))
+    async with open_session() as session:
+        run_id = await session.scalar(select(AgentRun.id))
+    assert run_id is not None
+
+    await execute_run(run_id)
+
+    async with open_session() as session:
+        run = await session.get(AgentRun, run_id)
+        tool_call = await session.scalar(select(ToolCall))
+    assert run is not None
+    assert run.status == RunStatus.FAILED
+    assert run.prompt_version == "payment-identification-slice3-v2"
+    assert run.tool_calls == 1
+    assert tool_call is not None
+    assert tool_call.status == "failed"
+    assert tool_call.error == "SerializationError"

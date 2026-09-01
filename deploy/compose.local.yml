@@ -33,8 +33,6 @@ services:
         required: false
     environment:
       CEREBRO_DATABASE_URL: postgresql://cerebro:local-dev-only@db:5432/cerebro
-      CEREBRO_READ_REPLICA_URL: ${CEREBRO_READ_REPLICA_URL:-}
-      CEREBRO_ALLOW_NON_REPLICA_READONLY_DB: ${CEREBRO_ALLOW_NON_REPLICA_READONLY_DB:-false}
     depends_on:
       web:
         condition: service_healthy

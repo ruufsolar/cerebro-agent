@@ -45,7 +45,14 @@ Last updated: 2026-09-01.
 - Configurable 8-turn, 20-tool, 180-second, and 4,096-output-token budgets.
 - Safe `unknown` outcomes for timeout, budget, refusal, and invalid structured output.
 - Durable bounded tool-call audit records without chain-of-thought.
+- Staged candidate retrieval, glosa-to-customer-name token evidence, and bounded retries for
+  physical-replica recovery conflicts. Exhausted replica retries become an unavailable-source
+  observation rather than a generic failed Slack run.
+- Partial tool audits survive fatal model/provider failures and are persisted idempotently.
 - Six-case synthetic eval corpus and opt-in Azure eval runner.
+- Azure-compatible numeric tool schemas retain Decimal validation without unsupported JSON
+  Schema regex, and the Slice 3 v2 prompt applies the documented confidence ceiling when
+  no glosa/address evidence exists.
 
 ## Not connected
 
@@ -58,8 +65,9 @@ Last updated: 2026-09-01.
 
 Slice 4 downloads and validates Slack screenshots into short-lived files and supplies them
 as multimodal model input. Until then, screenshot metadata is visible but image bytes are
-not investigated. Live Azure + production-replica acceptance remains pending on credentials
-and platform access; the complete data path is validated against the synthetic replica.
+not investigated. Azure Responses and the production replica role/schema preflight are now
+validated; a real Slack/FinOps pilot remains pending. The complete data path is also
+validated against the synthetic replica.
 
 ## Known facts from the reference systems
 
