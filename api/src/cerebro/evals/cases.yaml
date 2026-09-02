@@ -1,4 +1,4 @@
-version: slice3-v2
+version: slice4-v1
 cases:
   - id: address_glosa_match
     prompt: "Transferencia por $1.500.000, glosa Los Aromos 1234. ¿A qué cliente corresponde?"

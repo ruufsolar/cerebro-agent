@@ -4,9 +4,9 @@ The Slack surface uses Socket Mode: Cerebro opens an outbound WebSocket to Slack
 need a public URL, port forwarding, ngrok, or Tailscale. Tailscale will become relevant only
 if a later slice reaches a private replica/network endpoint from your laptop.
 
-With Azure credentials and a verified replica DSN, Slice 3 can investigate real text-based
-payment evidence. Without the replica, tools explicitly report unavailable. Without Azure,
-the deterministic fake runs even if a replica is configured. Screenshot bytes remain Slice 4.
+With Azure credentials and a verified replica DSN, Slice 4 can investigate text and static
+PNG/JPEG/WebP screenshots. Without the replica, tools explicitly report unavailable. Without
+Azure, the deterministic fake runs and intentionally does not download screenshots.
 
 ## Before starting
 
@@ -14,6 +14,8 @@ the deterministic fake runs even if a replica is configured. Screenshot bytes re
    safe test channel.
 2. Retrieve the existing app-level `xapp-…` token and bot `xoxb-…` token from the approved
    secret store. Do not paste either into chat, docs, or Git.
+   Confirm the installed bot grant includes `files:read`; reinstall the app only if its token
+   predates that scope.
 3. Stop or coordinate any deployed/local process using the same Socket Mode app token.
    Run only one consumer during this acceptance test so Slack does not distribute events
    to a different process.
@@ -57,7 +59,7 @@ docker compose -f deploy/compose.local.yml --profile slack ps
 docker compose -f deploy/compose.local.yml --profile slack logs -f slack worker
 ```
 
-Health should report `"phase":"replica-tools"`; Slack logs should show a connected Socket
+Health should report `"phase":"screenshot-vision"`; Slack logs should show a connected Socket
 Mode session, and worker logs should show no failed jobs.
 
 ## Acceptance script
@@ -67,7 +69,7 @@ Mode session, and worker logs should show no failed jobs.
 2. Confirm Cerebro shows native thread status and posts exactly one reply in that thread.
 3. Without a replica, confirm it reports unavailable sources and returns `unknown`. With
    Azure + replica, confirm any recommendation links to a CRM order returned by the
-   verification tool and includes the Slice 3 preview banner.
+   verification tool and includes the Slice 4 preview banner.
 4. Reply as a human in the same thread. Confirm a new investigation replies in that
    thread. A message in an unrelated thread must not trigger Cerebro.
 5. Add 🧀 to an investigation response. There should be no flavor reply.
@@ -75,7 +77,16 @@ Mode session, and worker logs should show no failed jobs.
    `Arrrrgghhh ⚡️☠️` in the same thread. Adding 🔌 to that flavor reply must do nothing.
 7. Remove a supported reaction; its feedback row should become inactive.
 8. Inspect the database if needed. Stored file JSON must contain only bounded image
-   metadata (`id`, `name`, `mimetype`, `size`), never `url_private`, thumbnails, or bytes.
+   metadata (`id`, `name`, `mimetype`, `size`) and categorical ingestion counts, never
+   `url_private`, thumbnails, local paths, Base64, or bytes.
+9. Attach one valid image plus a PDF, GIF, HEIC, oversized, or corrupt image. The valid image
+   should still be analyzed and the response must state exactly how many were not processed.
+10. In the worker container, confirm no run directories remain after both success and failure:
+
+   ```bash
+   docker compose -f deploy/compose.local.yml --profile slack exec worker \
+     find /tmp/cerebro-images -mindepth 1 -maxdepth 1 -type d -print
+   ```
 
 ## Mode checks
 
@@ -105,8 +116,9 @@ Restart the stack after changing `.env`. Keep `payment_writes_enabled` and
   event IDs/message timestamps; Cerebro has database uniqueness constraints at every stage.
 - Status API failure: the investigation should still finish. Check `assistant:write` and
   `chat:write` scopes before reinstalling.
-- Image appears ignored: only image MIME types within configured count/size limits are
-  retained as metadata. Slice 3 never downloads or reads the image.
+- Image appears ignored: confirm `files:read`, app reinstall timing, a Slack-hosted static
+  PNG/JPEG/WebP, the four-file/8 MiB limits, Azure configuration, and worker logs. PDFs,
+  GIFs, HEIC, external files, animated/corrupt images, and images above 25 MP are rejected.
 
 Do not paste the output of `docker compose config` into chat or tickets: Compose expands
 values from `.env`, including credentials. If a token appears in logs or shared diagnostic

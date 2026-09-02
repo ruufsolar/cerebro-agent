@@ -43,7 +43,7 @@ prompt/model/tool versions on the same cases before promotion.
 
 ## Synthetic model harness
 
-`src/cerebro/evals/cases.yaml` contains six Slice 3 versioned, synthetic cases for address, name,
+`src/cerebro/evals/cases.yaml` contains six Slice 4 versioned, synthetic cases for address, name,
 amount ambiguity, difficult first payment, contradictory evidence, and prompt injection.
 
 ```bash
@@ -52,8 +52,9 @@ uv run python -m cerebro.evals.run        # schema/corpus validation only
 uv run python -m cerebro.evals.run --live # Azure + synthetic fixture tools
 ```
 
-The live command requires approved Azure credentials but never connects to Slack or real
-Ruuf data. It is opt-in and not part of CI.
+The live command also generates a fake PNG bank screenshot and runs one vision case with
+fixture-only customer tools. It requires approved Azure credentials but never connects to
+Slack or real Ruuf data. It is opt-in and not part of CI.
 
 The separate `replica` Compose profile creates a schema-compatible PostgreSQL fixture and
 the integration test exercises the real deterministic tools. It does not call Azure or Slack.

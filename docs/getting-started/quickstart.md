@@ -12,12 +12,14 @@
 - Optional read-replica pool with schema/role checks, deterministic candidate tools, Vambe,
   and SQLGlot-validated long-tail queries.
 - Socket Mode mentions, known-thread follow-ups, in-thread replies, and 🧀/🔌 feedback.
+- Ephemeral Slack PNG/JPEG/WebP retrieval, byte validation, high-detail multimodal input,
+  partial fallback, and guaranteed per-run cleanup.
 - Safe-off configuration and explicit future write switches.
 - CI, container, VM deployment, backup, and documentation skeletons.
 
-It does not yet download screenshot bytes or emit PostHog events. Without a replica DSN,
-the live model reports sources unavailable; with a verified replica DSN, text-based
-investigation uses real read-only data.
+It does not yet emit PostHog events. Without a replica DSN, the live model reports sources
+unavailable; with a verified replica DSN, text and triggering-message screenshots use real
+read-only data for verification.
 
 ## Run with Docker
 
@@ -27,7 +29,7 @@ docker compose -f deploy/compose.local.yml up --build
 curl http://localhost:8000/health
 ```
 
-Expected response includes `"status":"ok"` and `"phase":"replica-tools"`. The Slack process
+Expected response includes `"status":"ok"` and `"phase":"screenshot-vision"`. The Slack process
 is opt-in; see [local Slack testing](local-slack-testing.md).
 
 ## Run with local Python
@@ -88,5 +90,5 @@ The fixture contains synthetic identities only. For the operator preflight, set
 
 ## Next implementation slice
 
-Build Slice 4 from [vertical-slices.md](../delivery/vertical-slices.md): authorized Slack
-screenshot download, multimodal input, and guaranteed temporary-file cleanup.
+Run Slice 5 from [vertical-slices.md](../delivery/vertical-slices.md): controlled real
+Slack/FinOps cases, expanded release-blocking evals, and pilot sign-off.

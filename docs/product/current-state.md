@@ -2,7 +2,7 @@
 
 Last updated: 2026-09-01.
 
-## Completed: Phase 0 through Slice 3 replica investigation
+## Completed: Phase 0 through Slice 4 screenshot vision
 
 - Independent Python 3.13/`uv` project.
 - FastAPI health endpoint.
@@ -20,7 +20,7 @@ Last updated: 2026-09-01.
 - Durable, idempotent event → conversation/message → run → outbox processing.
 - Public/private installed-channel mentions and human follow-ups in known threads.
 - Native investigation status and same-thread fake Spanish responses in `review`/`apply`.
-- Safe image metadata validation; no URL retention, byte download, or `image_paths` yet.
+- Safe image metadata validation with categorical accepted/rejected counts and no URL retention.
 - `off`, `shadow`, `review`, and pre-write `apply` mode gates.
 - 🧀/🔌 feedback, removal, and idempotent in-thread pain response.
 - Periodic recovery for event/run/output commit-to-enqueue gaps.
@@ -53,21 +53,28 @@ Last updated: 2026-09-01.
 - Azure-compatible numeric tool schemas retain Decimal validation without unsupported JSON
   Schema regex, and the Slice 3 v2 prompt applies the documented confidence ceiling when
   no glosa/address evidence exists.
+- Authenticated Slack screenshot retrieval for the triggering message only, using
+  `files.info`, manually validated Slack HTTPS redirects, and streamed size enforcement.
+- Static PNG/JPEG/WebP validation with MIME-signature agreement, animation/malformed-image
+  rejection, an 8 MiB/four-file limit, and a configurable 25-megapixel ceiling.
+- Per-run mode-`0700` temporary directories and mode-`0600` files with cleanup on every
+  result path plus worker-start orphan sweeping.
+- Base64 data-URL multimodal model input at `detail: high`; no OpenAI Files uploads, image
+  persistence, external traces, historical-image replay, or image content in audits.
+- Explicit partial-image fallback counts and a synthetic opt-in Azure vision evaluation.
 
 ## Not connected
 
-- Screenshot download/validation/temporary cleanup.
 - PostHog emission and launch dashboards.
 - Any automatic bank trigger.
 - Any monolith write API.
 
 ## Next slice
 
-Slice 4 downloads and validates Slack screenshots into short-lived files and supplies them
-as multimodal model input. Until then, screenshot metadata is visible but image bytes are
-not investigated. Azure Responses and the production replica role/schema preflight are now
-validated; a real Slack/FinOps pilot remains pending. The complete data path is also
-validated against the synthetic replica.
+Slice 5 validates the complete Slack → screenshot/text → Azure → replica/Vambe → response
+path with a controlled FinOps pilot and expands the release-blocking identification corpus.
+Azure Responses, production replica preflight, and the synthetic replica path are validated;
+real screenshot acceptance and FinOps sign-off remain rollout work.
 
 ## Known facts from the reference systems
 

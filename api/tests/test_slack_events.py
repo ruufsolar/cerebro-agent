@@ -127,7 +127,42 @@ def test_only_bounded_image_metadata_is_retained() -> None:
     assert result.payload["files"] == [
         {"id": "F1", "name": "cartola.png", "mimetype": "image/png", "size": 200}
     ]
+    assert result.payload["attachment_summary"] == {
+        "requested": 3,
+        "accepted": 1,
+        "rejected": 2,
+    }
     assert "secret.example" not in repr(result.payload)
+
+
+def test_only_static_slice4_mime_types_and_count_are_accepted() -> None:
+    files = [
+        {"id": "F-PNG", "mimetype": "image/png", "size": 10},
+        {"id": "F-JPEG", "mimetype": "image/jpeg", "size": 10},
+        {"id": "F-WEBP", "mimetype": "image/webp", "size": 10},
+        {"id": "F-GIF", "mimetype": "image/gif", "size": 10},
+        {"id": "F-HEIC", "mimetype": "image/heic", "size": 10},
+    ]
+    result = normalize_event(
+        envelope(
+            "app_mention",
+            channel="C1",
+            channel_type="channel",
+            ts="100.2",
+            user="U1",
+            text="pago",
+            files=files,
+        ),
+        bot_user_id="BOT",
+        config=AppConfig(max_images=2),
+    )
+
+    assert [item["id"] for item in result.payload["files"]] == ["F-PNG", "F-JPEG"]
+    assert result.payload["attachment_summary"] == {
+        "requested": 5,
+        "accepted": 2,
+        "rejected": 3,
+    }
 
 
 @pytest.mark.parametrize("reaction", ["cheese_wedge", "electric_plug"])

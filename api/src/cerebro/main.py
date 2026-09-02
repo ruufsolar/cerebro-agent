@@ -15,7 +15,7 @@ def create_app() -> FastAPI:
             "service": "cerebro-agent",
             "version": __version__,
             "environment": config.environment,
-            "phase": "replica-tools",
+            "phase": "screenshot-vision",
         }
 
     return app

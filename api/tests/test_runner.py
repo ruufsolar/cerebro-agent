@@ -27,3 +27,4 @@ async def test_fake_runner_is_deterministic_and_records_calls() -> None:
     assert runner.calls == [request]
     assert result.identification.confidence is Confidence.UNKNOWN
     assert result.identification.recommended_customer is None
+    assert runner.supports_image_input is False

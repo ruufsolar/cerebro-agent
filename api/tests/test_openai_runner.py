@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +13,7 @@ from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError, ModelRefusal
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_responses import OpenAIResponsesModel
 from openai import AsyncOpenAI
+from PIL import Image
 
 from cerebro.agent.data_tools import (
     EmptyInvestigationData,
@@ -53,6 +55,7 @@ def make_input(messages: tuple[TranscriptMessage, ...]) -> AgentRunInput:
         slack_thread_ts="1.1",
         requester_slack_user_id="U1",
         transcript=messages,
+        trigger_slack_message_ts="trigger",
     )
 
 
@@ -119,6 +122,7 @@ def test_transcript_is_structured_truncated_and_attachment_safe() -> None:
             text=f"message-{index}",
             event_at=datetime.now(UTC),
             sender_slack_user_id="U1",
+            slack_message_ts=f"message-{index}",
             attachments=(TranscriptAttachment("F1", "secret.png", "image/png", 42),)
             if index == 30
             else (),
@@ -129,9 +133,53 @@ def test_transcript_is_structured_truncated_and_attachment_safe() -> None:
     assert len(items) == 30
     assert items[0]["content"] == "message-1"
     assert items[-1]["role"] == "assistant"
-    assert "image/png (42 bytes)" in items[-1]["content"]
+    assert "captura(s) histórica(s)" in items[-1]["content"]
     assert "secret.png" not in items[-1]["content"]
     assert "F1" not in items[-1]["content"]
+
+
+def test_only_triggering_message_receives_high_detail_data_url(tmp_path: Path) -> None:
+    screenshot = tmp_path / "payment.png"
+    Image.new("RGB", (10, 10), "white").save(screenshot, format="PNG")
+    messages = (
+        TranscriptMessage(
+            direction="inbound",
+            text="captura anterior",
+            event_at=datetime.now(UTC),
+            sender_slack_user_id="U1",
+            slack_message_ts="previous",
+            attachments=(TranscriptAttachment("F0", None, "image/png", 20),),
+        ),
+        TranscriptMessage(
+            direction="inbound",
+            text="identifica este pago",
+            event_at=datetime.now(UTC),
+            sender_slack_user_id="U1",
+            slack_message_ts="trigger",
+            attachments=(TranscriptAttachment("F1", None, "image/png", 20),),
+        ),
+    )
+    run_input = make_input(messages)
+    run_input = replace(run_input, image_paths=(screenshot,))
+
+    items = build_input_items(run_input)
+
+    assert isinstance(items[0]["content"], str)
+    assert "histórica" in items[0]["content"]
+    content = items[1]["content"]
+    assert isinstance(content, list)
+    assert content[0] == {
+        "type": "input_text",
+        "text": (
+            "identifica este pago\n"
+            "[El mensaje actual incluye 1 captura(s); usa solamente las imágenes "
+            "adjuntas a este turno.]"
+        ),
+    }
+    assert content[1]["type"] == "input_image"
+    assert content[1]["detail"] == "high"
+    assert content[1]["image_url"].startswith("data:image/png;base64,")
+    assert str(screenshot) not in repr(items)
 
 
 async def test_empty_backend_is_explicitly_unavailable() -> None:
@@ -296,7 +344,7 @@ async def test_safe_sdk_outcomes_return_unknown(
         await runner.close()
     assert result.identification.confidence is Confidence.UNKNOWN
     assert result.completion_reason is reason
-    assert result.prompt_version == "payment-identification-slice3-v2"
+    assert result.prompt_version == "payment-identification-slice4-v1"
 
 
 async def test_success_records_usage_and_disables_sensitive_tracing(

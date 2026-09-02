@@ -1,6 +1,10 @@
+import asyncio
+import io
+from pathlib import Path
 from typing import Any
 
 import pytest
+from PIL import Image
 from sqlalchemy import func, select
 
 from cerebro.agent.models import (
@@ -15,6 +19,7 @@ from cerebro.agent.runner import (
     AgentRunInput,
     AgentRunResult,
     FakeAgentRunner,
+    TranscriptAttachment,
     set_agent_runner,
 )
 from cerebro.config import get_config
@@ -32,6 +37,7 @@ from cerebro.db.session import open_session
 from cerebro.jobs.tasks import recover_pending_work
 from cerebro.slack.events import normalize_event
 from cerebro.slack.gateway import set_slack_gateway
+from cerebro.slack.images import DownloadedImage, set_slack_file_client
 from cerebro.slack.pipeline import deliver_output, execute_run
 from cerebro.slack.service import process_stored_event, receive_event
 
@@ -75,6 +81,48 @@ class FailingSlackGateway(FakeSlackGateway):
         if self.fail_posts:
             raise RuntimeError("post unavailable")
         return f"200.{len(self.posts)}"
+
+
+class FixtureSlackFileClient:
+    def __init__(self) -> None:
+        output = io.BytesIO()
+        Image.new("RGB", (20, 10), "white").save(output, format="PNG")
+        self.data = output.getvalue()
+        self.calls: list[str] = []
+
+    async def download(
+        self, attachment: TranscriptAttachment, destination: Path
+    ) -> DownloadedImage:
+        self.calls.append(attachment.slack_file_id)
+        await asyncio.to_thread(destination.write_bytes, self.data)
+        return DownloadedImage(destination, "image/png")
+
+    async def close(self) -> None:
+        return None
+
+
+class InspectingVisionRunner(FakeAgentRunner):
+    def __init__(self) -> None:
+        super().__init__(
+            AgentRunResult(
+                identification=PaymentIdentification(
+                    confidence=Confidence.UNKNOWN,
+                    investigation_summary="Captura sintética investigada.",
+                ),
+                prompt_version="payment-identification-slice4-v1",
+            )
+        )
+        self.observed_bytes = b""
+
+    @property
+    def supports_image_input(self) -> bool:
+        return True
+
+    async def run(self, run_input: AgentRunInput) -> AgentRunResult:
+        assert len(run_input.image_paths) == 1
+        assert run_input.image_paths[0].exists()
+        self.observed_bytes = run_input.image_paths[0].read_bytes()
+        return await super().run(run_input)
 
 
 def message_envelope(
@@ -258,6 +306,103 @@ async def test_newer_thread_message_cancels_stale_run(
         output_count = await session.scalar(select(func.count()).select_from(SlackOutput))
     assert statuses == [RunStatus.CANCELLED, RunStatus.SUCCEEDED]
     assert output_count == 1
+
+
+async def test_trigger_image_is_ephemeral_and_partial_rejection_is_explicit(
+    clean_database: None,
+    memory_jobs: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del clean_database, memory_jobs
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "review")
+    get_config.cache_clear()
+    set_slack_gateway(FakeSlackGateway())
+    file_client = FixtureSlackFileClient()
+    set_slack_file_client(file_client)
+    runner = InspectingVisionRunner()
+    set_agent_runner(runner)
+    body = message_envelope("Ev-image", text="mira esta captura")
+    body["event"]["files"] = [
+        {
+            "id": "F-PNG",
+            "name": "payment.png",
+            "mimetype": "image/png",
+            "size": len(file_client.data),
+            "url_private": "https://must-not-persist.example/private",
+        },
+        {
+            "id": "F-PDF",
+            "name": "payment.pdf",
+            "mimetype": "application/pdf",
+            "size": 100,
+            "url_private": "https://must-not-persist.example/pdf",
+        },
+    ]
+    await store_and_process(body)
+    async with open_session() as session:
+        run_id = await session.scalar(select(AgentRun.id))
+    assert run_id is not None
+
+    await execute_run(run_id)
+
+    assert file_client.calls == ["F-PNG"]
+    assert runner.observed_bytes.startswith(b"\x89PNG")
+    assert not runner.calls[0].image_paths[0].exists()
+    async with open_session() as session:
+        run = await session.get(AgentRun, run_id)
+        output = await session.scalar(select(SlackOutput))
+        event = await session.scalar(select(SlackEvent))
+    assert run is not None and output is not None and event is not None
+    assert run.input_snapshot is not None
+    assert run.steps is not None
+    assert run.input_snapshot["image_ingestion"] == {
+        "requested": 2,
+        "metadata_accepted": 1,
+        "downloaded": 1,
+        "rejected": 1,
+        "failure_categories": [],
+    }
+    assert run.steps[0]["type"] == "image_ingestion"
+    assert "procesé 1 de 2; no pude procesar 1" in output.body
+    persisted = repr((run.input_snapshot, run.steps, event.payload))
+    assert "must-not-persist.example" not in persisted
+    assert "base64" not in persisted
+    assert "/tmp/cerebro-images" not in persisted
+
+
+async def test_stale_run_is_cancelled_before_image_download(
+    clean_database: None,
+    memory_jobs: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del clean_database, memory_jobs
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "review")
+    get_config.cache_clear()
+    set_slack_gateway(FakeSlackGateway())
+    file_client = FixtureSlackFileClient()
+    set_slack_file_client(file_client)
+    set_agent_runner(InspectingVisionRunner())
+    first = message_envelope("Ev-image-first", ts="100.1", text="mira")
+    first["event"]["files"] = [
+        {
+            "id": "F-PNG",
+            "mimetype": "image/png",
+            "size": len(file_client.data),
+        }
+    ]
+    await store_and_process(first)
+    await store_and_process(
+        message_envelope("Ev-image-second", event_type="message", ts="100.2", text="más contexto")
+    )
+    async with open_session() as session:
+        runs = list((await session.scalars(select(AgentRun).order_by(AgentRun.created_at))).all())
+
+    await execute_run(runs[0].id)
+
+    assert file_client.calls == []
+    async with open_session() as session:
+        status = await session.scalar(select(AgentRun.status).where(AgentRun.id == runs[0].id))
+    assert status == RunStatus.CANCELLED
 
 
 async def test_feedback_is_scoped_and_plug_flavor_is_not_recursive(
@@ -446,7 +591,7 @@ async def test_agents_sdk_metadata_and_tool_audit_are_persisted(
                     investigation_summary="Fuentes sintéticas sin coincidencias.",
                 ),
                 usage=AgentUsage(model="gpt-5-6-sol", input_tokens=100, output_tokens=20, turns=2),
-                prompt_version="payment-identification-slice3-v2",
+                prompt_version="payment-identification-slice4-v1",
                 knowledge_version="1",
                 completion_reason=CompletionReason.COMPLETED,
                 tool_calls=(
@@ -473,7 +618,7 @@ async def test_agents_sdk_metadata_and_tool_audit_are_persisted(
         run = await session.get(AgentRun, run_id)
         tool_call = await session.scalar(select(ToolCall))
     assert run is not None
-    assert run.prompt_version == "payment-identification-slice3-v2"
+    assert run.prompt_version == "payment-identification-slice4-v1"
     assert run.knowledge_version == "1"
     assert run.completion_reason == CompletionReason.COMPLETED
     assert run.model == "gpt-5-6-sol"
@@ -492,6 +637,10 @@ async def test_failed_runner_persists_partial_tool_audit(
     get_config.cache_clear()
 
     class AuditedFailureRunner:
+        @property
+        def supports_image_input(self) -> bool:
+            return False
+
         async def start(self) -> None:
             return None
 
@@ -502,7 +651,7 @@ async def test_failed_runner_persists_partial_tool_audit(
             del run_input
             raise AgentRunFailure(
                 "agent provider/runtime failure: APIConnectionError",
-                prompt_version="payment-identification-slice3-v2",
+                prompt_version="payment-identification-slice4-v1",
                 knowledge_version="1",
                 tool_calls=(
                     ToolAuditRecord(
@@ -528,7 +677,7 @@ async def test_failed_runner_persists_partial_tool_audit(
         tool_call = await session.scalar(select(ToolCall))
     assert run is not None
     assert run.status == RunStatus.FAILED
-    assert run.prompt_version == "payment-identification-slice3-v2"
+    assert run.prompt_version == "payment-identification-slice4-v1"
     assert run.tool_calls == 1
     assert tool_call is not None
     assert tool_call.status == "failed"

@@ -11,10 +11,12 @@ payment registration and hold actions will use approval-gated monolith APIs.
 
 ## Current state
 
-Slice 3 is implemented: the bounded Agents SDK investigator can use a dedicated monolith
+Slice 4 is implemented: the bounded Agents SDK investigator can use a dedicated monolith
 read replica through six audited tools for policy/schema lookup, candidate search,
 candidate verification, Vambe context, and allowlisted SQL. A recommendation is accepted
-only after deterministic candidate verification. Without Azure credentials, the
+only after deterministic candidate verification. Static PNG/JPEG/WebP screenshots from the
+triggering Slack message are securely downloaded, validated, sent as high-detail ephemeral
+model input, and deleted. Without Azure credentials, the
 deterministic fake runner remains available; replica preflight and integration tests can
 still run independently with the synthetic profile.
 
@@ -49,7 +51,7 @@ in [Azure OpenAI setup](docs/integrations/azure-openai.md). Validate the synthet
 without calling Azure from `api/` with `uv run python -m cerebro.evals.run`; add `--live`
 only when approved credentials are present.
 
-To test the Slice 3 data boundary without Azure or Slack:
+To test the replica data boundary without Azure or Slack:
 
 ```bash
 docker compose -f deploy/compose.local.yml --profile replica up -d replica --wait

@@ -1,6 +1,7 @@
 """OpenAI Agents SDK runner backed by an Azure OpenAI v1 endpoint."""
 
 import asyncio
+import base64
 import logging
 import os
 from dataclasses import dataclass, field
@@ -158,12 +159,40 @@ def build_input_items(run_input: AgentRunInput) -> list[dict[str, Any]]:
         role = "assistant" if message.direction == "outbound" else "user"
         text = message.text or ""
         if message.attachments:
-            descriptions = ", ".join(
-                f"{attachment.mimetype} ({attachment.size} bytes)"
-                for attachment in message.attachments
-            )
-            text = f"{text}\n[Adjuntos no descargados en Slice 3: {descriptions}]".strip()
-        items.append({"role": role, "content": text})
+            if message.slack_message_ts == run_input.trigger_slack_message_ts:
+                text = (
+                    f"{text}\n[El mensaje actual incluye {len(message.attachments)} "
+                    "captura(s); usa solamente las imágenes adjuntas a este turno.]"
+                ).strip()
+            else:
+                text = (
+                    f"{text}\n[Hay {len(message.attachments)} captura(s) histórica(s) "
+                    "sanitizada(s), no reenviadas al modelo.]"
+                ).strip()
+        if (
+            role == "user"
+            and message.slack_message_ts == run_input.trigger_slack_message_ts
+            and run_input.image_paths
+        ):
+            content: list[dict[str, str]] = [{"type": "input_text", "text": text}]
+            for path in run_input.image_paths:
+                mimetype = {
+                    ".png": "image/png",
+                    ".jpg": "image/jpeg",
+                    ".jpeg": "image/jpeg",
+                    ".webp": "image/webp",
+                }[path.suffix.lower()]
+                encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+                content.append(
+                    {
+                        "type": "input_image",
+                        "image_url": f"data:{mimetype};base64,{encoded}",
+                        "detail": "high",
+                    }
+                )
+            items.append({"role": role, "content": content})
+        else:
+            items.append({"role": role, "content": text})
     return items
 
 
@@ -193,6 +222,10 @@ class OpenAIAgentsRunner:
             api_key=config.azure_openai_api_key,
             default_headers={"api-key": config.azure_openai_api_key},
         )
+
+    @property
+    def supports_image_input(self) -> bool:
+        return True
 
     async def close(self) -> None:
         await self.data.close()

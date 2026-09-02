@@ -20,6 +20,7 @@ from cerebro.db.models import (
 from cerebro.db.session import dispose_engine, open_session
 from cerebro.jobs.app import app as job_app
 from cerebro.slack.gateway import set_slack_gateway
+from cerebro.slack.images import set_slack_file_client
 
 
 @pytest.fixture
@@ -50,5 +51,6 @@ async def clean_database() -> AsyncIterator[None]:
     yield
     set_agent_runner(FakeAgentRunner())
     set_slack_gateway(None)
+    set_slack_file_client(None)
     get_config.cache_clear()
     await dispose_engine()

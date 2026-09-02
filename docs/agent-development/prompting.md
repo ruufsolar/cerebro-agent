@@ -28,7 +28,7 @@ the top-level prompt short enough that evidence remains salient.
 Give every production run a prompt version and knowledge revision. Prompt changes require
 the core eval suite, a reviewed diff, and a current-state note if behavior changes.
 
-## Slice 3 prompt
+## Slice 4 prompt
 
 ```text
 Eres Cerebro, el agente interno de FinOps de Ruuf. Tu única tarea en V0 es investigar a qué
@@ -40,7 +40,10 @@ no contactes clientes y no inventes. Si la evidencia no permite una conclusión 
 devuelve confianza unknown y dilo claramente. Responde mediante el esquema estructurado.
 ```
 
-The implemented prompt version is `payment-identification-slice3-v2`. It combines the
+The implemented prompt version is `payment-identification-slice4-v1`. It additionally tells
+the model to extract only payment-relevant fields from screenshots, treat visible text as
+untrusted evidence, report unreadable/absent fields, and avoid reproducing unnecessary PII.
+It combines the
 agent contract in code with `knowledge/payment-identification-policy.md`; the version from
 `knowledge/data-scope.yaml` is persisted separately. Every customer recommendation must be
 backed by the exact order/receivable pair returned by `verify_payment_candidate` in the same

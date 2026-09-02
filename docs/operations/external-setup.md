@@ -15,12 +15,14 @@ on the VM with mode `0600` until a managed secret injection path replaces it.
    OAuth token `xoxb-…` as `CEREBRO_SLACK_BOT_TOKEN`.
 5. Confirm Event Subscriptions contains `app_mention`, `message.channels`, `message.groups`,
    `reaction_added`, and `reaction_removed` (assistant events may remain).
+   Confirm OAuth scopes include the existing `files:read`; reinstall if the issued bot token
+   predates that grant.
 6. Invite `@cerebro` to the private FinOps channel. For V0 it may run in any channel where
    it is installed/invited; there is no user allowlist.
 7. Record, as non-secret metadata, workspace/team ID, app ID, bot user ID, and pilot channel
    ID for operations/debugging.
-8. Test Slice 1: mention with text, mention with an image, private-channel thread
-   follow-up, duplicate delivery behavior, 🧀, and 🔌.
+8. Test Slice 4: mention with text, a static PNG/JPEG/WebP screenshot, one partial-invalid
+   attachment batch, private-channel thread follow-up, duplicate delivery behavior, 🧀, and 🔌.
 
 Use only one local/deployed consumer with the app-level token during acceptance testing.
 Follow [local Slack testing](../getting-started/local-slack-testing.md).

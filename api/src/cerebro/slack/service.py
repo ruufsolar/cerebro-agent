@@ -111,6 +111,12 @@ async def _store_trigger(
             raw={
                 "event_type": payload.get("event_type"),
                 "image_count": len(file_metadata),
+                "attachment_summary": payload.get("attachment_summary")
+                or {
+                    "requested": len(file_metadata),
+                    "accepted": len(file_metadata),
+                    "rejected": 0,
+                },
             },
             event_at=_event_time(str(payload["message_ts"])),
         )

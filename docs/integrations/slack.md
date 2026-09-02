@@ -28,8 +28,13 @@ requires an app-level `connections:write` token created outside the manifest.
 - Ignore bot/subtype loops and messages outside known Cerebro threads.
 - Resolve `thread_ts` to root `ts` when the mention starts a thread.
 - Acknowledge first; perform slow work in a durable job.
-- Store only bounded image metadata (`id`, `name`, `mimetype`, `size`). Slice 1 does not
-  retain private URLs, download bytes, or populate `image_paths`.
+- Store only bounded image metadata (`id`, `name`, `mimetype`, `size`) and categorical counts.
+  Resolve the triggering message's accepted file IDs through `files.info`; never retain
+  private URLs, bytes, data URLs, OCR output, or local paths.
+- Download only Slack-hosted static PNG/JPEG/WebP over manually validated Slack HTTPS origins.
+  Stream into a private per-run directory, validate actual bytes with Pillow, send direct
+  Base64 data URLs at `detail: high`, and delete the directory in `finally`.
+- Historical thread screenshots remain metadata placeholders and are never resent.
 - Treat Slack text/files as untrusted evidence.
 - Use one Slack output idempotency key per run/render version and the output UUID as
   `chat.postMessage.client_msg_id`.
@@ -37,8 +42,9 @@ requires an app-level `connections:write` token created outside the manifest.
 ## Current mode behavior
 
 - `off`: acknowledge and durably mark supported events ignored; emit nothing.
-- `shadow`: store/process events and execute the fake runner; emit nothing.
-- `review`: set native status and deliver the fake result in-thread.
+- `shadow`: store/process events and execute the configured runner, including ephemeral image
+  analysis when Azure is configured; emit nothing.
+- `review`: set native status and deliver the configured runner result in-thread.
 - `apply`: identical to `review` until approval-gated write capabilities exist.
 
 Only investigation outputs accept feedback. 🧀 records positive feedback. 🔌 records
@@ -50,4 +56,5 @@ so this slice does not need Tailscale or an inbound tunnel.
 
 Reference: [Slack app quickstart and Socket Mode](https://docs.slack.dev/quickstart/),
 [reaction event](https://docs.slack.dev/reference/events/reaction_added/), and
-[native assistant status](https://docs.slack.dev/reference/methods/assistant.threads.setStatus/).
+[native assistant status](https://docs.slack.dev/reference/methods/assistant.threads.setStatus/),
+and [private file objects](https://docs.slack.dev/reference/objects/file-object/).

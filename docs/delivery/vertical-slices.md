@@ -49,7 +49,7 @@ Acceptance: the synthetic replica proves role/schema checks, outstanding-balance
 candidate verification, candidate-scoped Vambe, and allowlisted raw SQL. Production/staging
 connection and FinOps case reconciliation remain rollout acceptance rather than code work.
 
-## Slice 4 — screenshots
+## Slice 4 — screenshots (implemented)
 
 - Slack-authorized file download with allowed MIME types, four-image/8 MiB limits, timeouts,
   isolated temporary storage, and guaranteed cleanup.

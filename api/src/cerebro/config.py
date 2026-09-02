@@ -53,6 +53,10 @@ class AppConfig(BaseSettings):
     sql_max_rows: int = Field(default=200, ge=1, le=1_000)
     max_images: int = Field(default=4, ge=1, le=10)
     max_image_bytes: int = Field(default=8 * 1024 * 1024, ge=1_024)
+    max_image_pixels: int = Field(default=25_000_000, ge=1, le=100_000_000)
+    slack_file_timeout_seconds: int = Field(default=15, ge=1, le=60)
+    slack_image_batch_timeout_seconds: int = Field(default=30, ge=1, le=120)
+    image_temp_root: str = "/tmp/cerebro-images"
     slack_delivery_max_attempts: int = Field(default=3, ge=1, le=10)
 
     crm_finops_base_url: str = "https://tutu.ruuf.cl/account-receivables/crm-finops"

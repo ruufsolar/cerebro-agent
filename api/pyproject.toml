@@ -12,6 +12,7 @@ dependencies = [
     "httpx>=0.28.1",
     "openai>=3.3.1",
     "openai-agents>=0.22.0",
+    "pillow>=11.3.0",
     "posthog>=7.43.0",
     "procrastinate>=3.9.0",
     "psycopg[binary]>=3.3.3",

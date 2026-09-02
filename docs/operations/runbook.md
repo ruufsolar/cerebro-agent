@@ -65,6 +65,18 @@ refusal, and invalid structured output are successful `unknown` investigations w
 runs. Use the error category and Azure request metadata, never prompt/customer content, for
 diagnosis.
 
+## Screenshot unavailable or image cleanup alert
+
+Confirm the installed Slack bot token includes `files:read`, the file is Slack-hosted static
+PNG/JPEG/WebP, and the configured count/byte/pixel/time limits were not exceeded. Use only the
+categorical failure reason in `agent_run.input_snapshot`/steps; never print a private URL,
+data URL, screenshot path, bytes, or extracted PII to logs.
+
+The worker sweeps abandoned `run-*` directories under `/tmp/cerebro-images` at startup. After
+an investigation, that directory should contain no run directories. If a hard crash leaves
+one behind, stop the worker, preserve no screenshot content, restart it to run the bounded
+sweep, and verify cleanup before resuming `review`/`shadow` mode.
+
 ## Restore Cerebro state
 
 Stop web/worker, create an empty Cerebro DB, and use `pg_restore` from a known backup. This

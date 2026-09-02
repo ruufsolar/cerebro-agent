@@ -47,7 +47,13 @@ The endpoint may be the resource root or already end in `/openai/v1/`; Cerebro n
 both forms. Set `CEREBRO_AZURE_OPENAI_USE_RESPONSES=false` only as a compatibility fallback.
 Reasoning/store settings that are specific to Responses are omitted in that mode.
 
-The runtime selects the Slice 3 replica backend only when
+Validated screenshots are attached only to the triggering user turn using direct Base64
+data-URL `input_image` content with `detail: high`. The same Agents SDK input shape is used
+for Responses and the Chat Completions compatibility fallback. Cerebro does not use the
+OpenAI Files API; data URLs exist only in process memory for the model call and are never
+persisted or logged.
+
+The runtime selects the replica backend only when
 `CEREBRO_READ_REPLICA_URL` is configured; otherwise every data operation explicitly reports
 unavailable and the model must abstain. Synthetic observations are confined to
 `cerebro.evals` and are never selected by the Slack worker. Even with replica data, the

@@ -31,7 +31,21 @@ class TranscriptMessage:
     text: str | None
     event_at: datetime
     sender_slack_user_id: str | None
+    slack_message_ts: str | None = None
     attachments: tuple[TranscriptAttachment, ...] = ()
+
+
+@dataclass(frozen=True)
+class ImageIngestion:
+    requested: int = 0
+    metadata_accepted: int = 0
+    downloaded: int = 0
+    rejected: int = 0
+    failure_categories: tuple[str, ...] = ()
+
+    @property
+    def unprocessed(self) -> int:
+        return max(self.requested - self.downloaded, 0)
 
 
 @dataclass(frozen=True)
@@ -41,7 +55,9 @@ class AgentRunInput:
     slack_thread_ts: str
     requester_slack_user_id: str
     transcript: tuple[TranscriptMessage, ...]
+    trigger_slack_message_ts: str | None = None
     image_paths: tuple[Path, ...] = ()
+    image_ingestion: ImageIngestion = field(default_factory=ImageIngestion)
 
 
 @dataclass(frozen=True)
@@ -73,6 +89,9 @@ class AgentRunFailure(RuntimeError):
 
 
 class AgentRunner(Protocol):
+    @property
+    def supports_image_input(self) -> bool: ...
+
     async def start(self) -> None: ...
 
     async def run(self, run_input: AgentRunInput) -> AgentRunResult: ...
@@ -92,6 +111,10 @@ class FakeAgentRunner:
                 unable_to_verify=["customer", "account receivable"],
             )
         )
+
+    @property
+    def supports_image_input(self) -> bool:
+        return False
 
     async def run(self, run_input: AgentRunInput) -> AgentRunResult:
         self.calls.append(run_input)

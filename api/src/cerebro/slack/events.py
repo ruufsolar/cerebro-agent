@@ -4,6 +4,8 @@ from typing import Any
 
 from cerebro.config import AppConfig
 
+ALLOWED_IMAGE_MIMETYPES = {"image/jpeg", "image/png", "image/webp"}
+
 
 class SlackEventKind(StrEnum):
     MENTION = "mention"
@@ -22,22 +24,27 @@ class NormalizedSlackEvent:
     ignore_reason: str | None = None
 
 
-def _safe_images(files: object, config: AppConfig) -> list[dict[str, Any]]:
+def _safe_images(files: object, config: AppConfig) -> tuple[list[dict[str, Any]], dict[str, int]]:
     if not isinstance(files, list):
-        return []
+        return [], {"requested": 0, "accepted": 0, "rejected": 0}
     result: list[dict[str, Any]] = []
+    requested = len(files)
     for raw in files:
-        if len(result) >= config.max_images or not isinstance(raw, dict):
-            break
+        if len(result) >= config.max_images:
+            continue
+        if not isinstance(raw, dict):
+            continue
         mimetype = raw.get("mimetype")
         size = raw.get("size")
         file_id = raw.get("id")
         if (
             not isinstance(mimetype, str)
-            or not mimetype.startswith("image/")
+            or mimetype not in ALLOWED_IMAGE_MIMETYPES
             or not isinstance(size, int)
+            or size <= 0
             or size > config.max_image_bytes
             or not isinstance(file_id, str)
+            or not file_id
         ):
             continue
         result.append(
@@ -48,7 +55,11 @@ def _safe_images(files: object, config: AppConfig) -> list[dict[str, Any]]:
                 "size": size,
             }
         )
-    return result
+    return result, {
+        "requested": requested,
+        "accepted": len(result),
+        "rejected": max(requested - len(result), 0),
+    }
 
 
 def _ignored(event_id: str, event_type: str, reason: str) -> NormalizedSlackEvent:
@@ -130,6 +141,7 @@ def normalize_event(
 
     root_ts = event.get("thread_ts") or message_ts
     kind = SlackEventKind.MENTION if event_type == "app_mention" else SlackEventKind.THREAD_MESSAGE
+    files, attachment_summary = _safe_images(event.get("files"), config)
     return NormalizedSlackEvent(
         slack_event_id=event_id,
         event_type=event_type,
@@ -143,6 +155,7 @@ def normalize_event(
             "thread_ts": root_ts,
             "user": user,
             "text": text if isinstance(text, str) else "",
-            "files": _safe_images(event.get("files"), config),
+            "files": files,
+            "attachment_summary": attachment_summary,
         },
     )
