@@ -1,0 +1,157 @@
+name: Deploy to production
+
+# Points the production VM at the newest main commit that has a published image, then
+# re-runs activation on the VM through Azure Run Command. Runs on a schedule so a merge to
+# main reaches production within a business day, and on demand for a specific tag, a forced
+# re-activation, or a rollback.
+on:
+  schedule:
+    # 12:00 UTC on weekdays: 08:00 or 09:00 in Santiago depending on daylight saving.
+    - cron: "0 12 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: "Image tag to deploy. Empty deploys the newest main commit with a published image."
+        required: false
+        default: ""
+      force:
+        description: "Re-run activation even if this tag is already deployed."
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write
+
+# Never let two deploys interleave; the VM's own update lock would refuse the second one.
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # The federated credential trusts this environment, not the branch, so protection rules
+    # (required reviewers, deployment branches) configured on it gate every production change.
+    environment: production
+    env:
+      RESOURCE_GROUP: ${{ vars.AZURE_RESOURCE_GROUP }}
+      VM_NAME: ${{ vars.AZURE_VM_NAME }}
+      VAULT_NAME: ${{ vars.AZURE_KEY_VAULT_NAME }}
+      REGISTRY_NAME: ${{ vars.AZURE_REGISTRY_NAME }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 30
+
+      # Federated credential: the workflow proves its identity with a short-lived OIDC token.
+      # The values are non-secret identifiers from `terraform output github_actions_variables`.
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_DEPLOY_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve the image tag to deploy
+        id: resolve
+        env:
+          REQUESTED: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$REQUESTED" ]; then
+            candidates=$REQUESTED
+          else
+            # Newest first. A commit may lack an image if its publish run failed or is still
+            # running, so walk back to the newest one that actually exists in the registry.
+            candidates=$(git rev-list --max-count=30 HEAD)
+          fi
+          tag=""
+          for candidate in $candidates; do
+            if az acr repository show --name "$REGISTRY_NAME" --image "cerebro-agent:$candidate" \
+                --only-show-errors --output none 2>/dev/null; then
+              tag=$candidate
+              break
+            fi
+          done
+          [ -n "$tag" ] || { echo "No candidate has a published image in the registry." >&2; exit 1; }
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Resolved image tag: $tag"
+
+      - name: Read the currently deployed tag
+        id: current
+        run: |
+          set -euo pipefail
+          current=$(az keyvault secret show --vault-name "$VAULT_NAME" --name image-tag \
+            --query value --output tsv | tr -d '\r\n')
+          echo "tag=$current" >> "$GITHUB_OUTPUT"
+          echo "Currently deployed tag: $current"
+
+      - name: Nothing to deploy
+        if: steps.current.outputs.tag == steps.resolve.outputs.tag && inputs.force != true
+        run: echo "Tag ${{ steps.resolve.outputs.tag }} is already deployed; nothing to do."
+
+      - name: Point production at the new image
+        id: point
+        if: steps.current.outputs.tag != steps.resolve.outputs.tag || inputs.force == true
+        env:
+          TAG: ${{ steps.resolve.outputs.tag }}
+        run: |
+          set -euo pipefail
+          az keyvault secret set --vault-name "$VAULT_NAME" --name image-tag --value "$TAG" \
+            --only-show-errors --output none
+          echo "Key Vault image-tag is now $TAG"
+
+      - name: Activate on the VM
+        id: activate
+        if: steps.point.outcome == 'success'
+        run: |
+          set -euo pipefail
+          result=$(az vm run-command invoke \
+            --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" \
+            --command-id RunShellScript \
+            --scripts @infra/terraform/scripts/activate-remote.sh \
+            --query 'value[0].message' --output tsv)
+          printf '%s\n' "$result"
+          grep -qF CEREBRO_ACTIVATE_OK <<<"$result" || {
+            echo "::error::Activation did not complete on the VM." >&2
+            exit 1
+          }
+
+      - name: Run the pilot preflight
+        if: steps.activate.outcome == 'success'
+        run: |
+          set -euo pipefail
+          result=$(az vm run-command invoke \
+            --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" \
+            --command-id RunShellScript \
+            --scripts 'cd /etc/cerebro-agent && docker compose -f compose.yml --env-file compose.env exec -T web python -m cerebro.ops.preflight --profile pilot && echo CEREBRO_PREFLIGHT_OK' \
+            --query 'value[0].message' --output tsv)
+          printf '%s\n' "$result"
+          grep -qF CEREBRO_PREFLIGHT_OK <<<"$result" || {
+            echo "::error::Preflight reported a failing check." >&2
+            exit 1
+          }
+
+      # Only after the tag was changed and activation or preflight failed: restore the
+      # previous tag and re-activate so production is left on the release it was running.
+      - name: Roll back to the previously deployed tag
+        if: failure() && steps.point.outcome == 'success'
+        env:
+          PREVIOUS: ${{ steps.current.outputs.tag }}
+        run: |
+          set -euo pipefail
+          echo "::warning::Rolling production back to $PREVIOUS"
+          az keyvault secret set --vault-name "$VAULT_NAME" --name image-tag --value "$PREVIOUS" \
+            --only-show-errors --output none
+          result=$(az vm run-command invoke \
+            --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" \
+            --command-id RunShellScript \
+            --scripts @infra/terraform/scripts/activate-remote.sh \
+            --query 'value[0].message' --output tsv)
+          printf '%s\n' "$result"
+          grep -qF CEREBRO_ACTIVATE_OK <<<"$result" || {
+            echo "::error::Rollback activation did not complete; production needs manual attention." >&2
+            exit 1
+          }
+          echo "Production is back on $PREVIOUS."

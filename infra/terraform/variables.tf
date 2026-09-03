@@ -90,3 +90,26 @@ variable "github_repository" {
     error_message = "github_repository must look like owner/name."
   }
 }
+
+# GitHub's OIDC subject claim embeds these numeric IDs. Find them with:
+#   gh api repos/OWNER/NAME --jq '{owner_id: .owner.id, repository_id: .id}'
+variable "github_owner_id" {
+  description = "Numeric GitHub ID of the repository owner (organization or user)."
+  type        = number
+}
+
+variable "github_repository_id" {
+  description = "Numeric GitHub ID of the repository."
+  type        = number
+}
+
+variable "github_deploy_environment" {
+  description = "GitHub environment whose jobs may change the production image tag and activate the VM."
+  type        = string
+  default     = "production"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._-]+$", var.github_deploy_environment))
+    error_message = "github_deploy_environment must be a plain environment name."
+  }
+}

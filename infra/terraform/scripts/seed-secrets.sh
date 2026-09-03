@@ -7,6 +7,8 @@ usage() {
 Usage: seed-secrets.sh --vault-name NAME --env-file PATH [--mode MODE] [--image-tag TAG]
 
 Reads approved runtime values without sourcing the env file and uploads them to Key Vault.
+The Cerebro database password is reused from the vault on reseed; export CEREBRO_DB_PASSWORD
+only for a deliberate database password rotation, which also requires an ALTER ROLE on the VM.
 The VM pulls images with its managed identity, so no registry credential is seeded.
 Production mode defaults to "off" and must be changed explicitly.
 EOF
@@ -74,7 +76,21 @@ AZURE_OPENAI_ENDPOINT=$(env_value CEREBRO_AZURE_OPENAI_ENDPOINT)
 AZURE_OPENAI_API_KEY=$(env_value CEREBRO_AZURE_OPENAI_API_KEY)
 AZURE_DEPLOYMENT_MAIN=$(env_value CEREBRO_AZURE_DEPLOYMENT_MAIN)
 READ_REPLICA_URL=$(env_value CEREBRO_READ_REPLICA_URL)
-DB_PASSWORD=${CEREBRO_DB_PASSWORD:-$(openssl rand -hex 32)}
+# The local PostgreSQL keeps whatever password it was initialised with on the retained data
+# disk, so a reseed must reuse the current vault value. Generate a new password only when the
+# vault has none yet, or when the operator explicitly overrides it.
+existing_db_password() {
+  az keyvault secret show \
+    --vault-name "$VAULT_NAME" \
+    --name cerebro-db-password \
+    --query value \
+    --output tsv 2>/dev/null | tr -d '\r\n' || true
+}
+DB_PASSWORD=${CEREBRO_DB_PASSWORD:-$(existing_db_password)}
+if [ -z "$DB_PASSWORD" ]; then
+  DB_PASSWORD=$(openssl rand -hex 32)
+  echo "No cerebro-db-password exists in the vault yet; generating one."
+fi
 
 require_value CEREBRO_SLACK_APP_TOKEN "$SLACK_APP_TOKEN"
 require_value CEREBRO_SLACK_BOT_TOKEN "$SLACK_BOT_TOKEN"
