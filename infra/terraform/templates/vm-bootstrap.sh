@@ -71,12 +71,18 @@ vault_secret() {
   case "$value" in
     *$'\n'*|*$'\r'*) fail "Key Vault secret contains a forbidden newline: $name" ;;
   esac
+  if [[ "$value" == *"\\'"* || "$value" == *"\\" ]]; then
+    fail "Key Vault secret has no lossless env-file encoding: $name"
+  fi
   printf '%s' "$value"
 }
 
+# Compose reads a single-quoted env-file value literally and resolves only \' to a
+# quote, so escaping backslashes here would double them inside the container. Escape
+# quotes only; vault_secret rejects the two forms this cannot represent (a backslash
+# immediately before a quote, and a trailing backslash).
 dotenv_value() {
-  local escaped=${1//\\/\\\\}
-  escaped=${escaped//\'/\\\'}
+  local escaped=${1//\'/\\\'}
   printf "'%s'" "$escaped"
 }
 

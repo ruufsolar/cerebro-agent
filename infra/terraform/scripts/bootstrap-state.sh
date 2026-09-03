@@ -27,8 +27,11 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$SUBSCRIPTION" ] && [ -n "$LOCATION" ] && [ -n "$RESOURCE_GROUP" ] && \
-  [ -n "$STORAGE_ACCOUNT" ] || { usage >&2; exit 2; }
+if [ -z "$SUBSCRIPTION" ] || [ -z "$LOCATION" ] || [ -z "$RESOURCE_GROUP" ] ||
+  [ -z "$STORAGE_ACCOUNT" ]; then
+  usage >&2
+  exit 2
+fi
 [[ "$STORAGE_ACCOUNT" =~ ^[a-z0-9]{3,24}$ ]] || {
   echo "storage-account must contain 3-24 lowercase letters and digits" >&2
   exit 2

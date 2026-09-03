@@ -39,6 +39,9 @@ jobs:
       - run: uv run pyright src tests
       - run: uv run alembic upgrade head
       - run: uv run alembic check
+      # The runtime applies the Procrastinate schema on web start; tests that touch the
+      # job tables need the same step here.
+      - run: uv run python -m cerebro.jobs.schema
       - run: uv run pytest -q
 
   container:

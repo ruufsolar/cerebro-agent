@@ -28,7 +28,10 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-[ -n "$VAULT_NAME" ] && [ -n "$ENV_FILE" ] || { usage >&2; exit 2; }
+if [ -z "$VAULT_NAME" ] || [ -z "$ENV_FILE" ]; then
+  usage >&2
+  exit 2
+fi
 [ -r "$ENV_FILE" ] || { echo "env file is not readable" >&2; exit 2; }
 [[ "$GLOBAL_MODE" =~ ^(off|shadow|review|apply)$ ]] || {
   echo "mode must be off, shadow, review, or apply" >&2
