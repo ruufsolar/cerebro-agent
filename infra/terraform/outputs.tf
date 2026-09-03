@@ -29,13 +29,17 @@ output "registry_login_server" {
 }
 
 output "github_actions_variables" {
-  description = "Non-secret repository variables to set on the GitHub repo so CI can push images."
+  description = "Non-secret repository variables to set on the GitHub repo so CI can push images and the scheduled workflow can deploy them."
   value = {
     AZURE_CI_CLIENT_ID          = azurerm_user_assigned_identity.ci.client_id
+    AZURE_DEPLOY_CLIENT_ID      = azurerm_user_assigned_identity.deploy.client_id
     AZURE_TENANT_ID             = data.azurerm_client_config.current.tenant_id
     AZURE_SUBSCRIPTION_ID       = var.subscription_id
     AZURE_REGISTRY_NAME         = azurerm_container_registry.cerebro.name
     AZURE_REGISTRY_LOGIN_SERVER = azurerm_container_registry.cerebro.login_server
+    AZURE_RESOURCE_GROUP        = azurerm_resource_group.cerebro.name
+    AZURE_VM_NAME               = azurerm_linux_virtual_machine.runtime.name
+    AZURE_KEY_VAULT_NAME        = azurerm_key_vault.cerebro.name
   }
 }
 

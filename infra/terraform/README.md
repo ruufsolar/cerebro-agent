@@ -65,7 +65,7 @@ The person applying Terraform needs:
 - an Azure CLI login in the target tenant/subscription;
 - permission to create the resource group and its resources;
 - `Owner` or `User Access Administrator` plus `Contributor` at the target scope, because
-  Terraform creates four RBAC assignments (two on the Key Vault, two on the registry);
+  Terraform creates seven RBAC assignments and one custom role definition (see step 2);
 - permission to create the separately managed Terraform-state resource group/storage;
 - Terraform 1.9+ and Azure CLI;
 - the reviewed repository checkout, and write access to the GitHub repository so the CI
@@ -117,8 +117,9 @@ terraform apply cerebro-prod.tfplan
 
 Do not use `-auto-approve`. Review the plan for one VM, one retained managed disk, one NAT
 Gateway/public egress IP, no VM public IP or custom inbound rule, the dedicated network,
-Key Vault, the container registry, the CI identity with its federated credential, and exactly
-four role assignments: two scoped to the vault and two scoped to the registry.
+Key Vault, the container registry, two user-assigned identities (publish and deploy) with
+their federated credentials, one custom role definition, and exactly seven role assignments:
+three scoped to the vault, three scoped to the registry, and one scoped to the VM.
 
 After apply:
 
@@ -132,8 +133,11 @@ service will retry safely while secrets or replica connectivity are unavailable.
 
 ### 3. Let CI publish images to the registry
 
-Terraform creates the registry, a CI identity, and a federated credential trusting this
-repository's `main` branch. Publish the non-secret identifiers as GitHub repository
+Terraform creates the registry, a CI identity, and federated credentials trusting this
+repository's `main` branch in both subject forms GitHub can present (plain `owner/repo` and
+the ID-qualified `owner@id/repo@id`, which is GitHub's current default). The numeric IDs
+come from `github_owner_id` and `github_repository_id` in `terraform.tfvars`; find them with
+`gh api repos/OWNER/NAME --jq '{owner_id: .owner.id, repository_id: .id}'`. Publish the non-secret identifiers as GitHub repository
 variables so `publish.yml` can authenticate without any stored secret:
 
 ```bash
@@ -146,6 +150,14 @@ terraform output -json github_actions_variables |
 
 Push to `main` (or rerun the workflow) and confirm the image lands in the registry before
 activating. Nothing is stored in GitHub secrets; a federated OIDC token is exchanged per run.
+
+The same output also carries the identifiers `deploy.yml` needs. Create the GitHub
+environment the deploy identity trusts (`production` by default) and, if you want a human
+gate on production changes, add required reviewers to it:
+
+```bash
+gh api -X PUT repos/ruufsolar/cerebro-agent/environments/production --silent
+```
 
 ### 4. Seed secrets without Terraform
 
@@ -173,7 +185,7 @@ The resulting vault contract is explicit and intentionally small:
 | `slack-app-token`, `slack-bot-token` | approved Cerebro `.env` |
 | `azure-openai-endpoint`, `azure-openai-api-key`, `azure-deployment-main` | approved Cerebro `.env` |
 | `read-replica-url` | approved Cerebro `.env` |
-| `cerebro-db-password` | generated, or explicit operator environment override |
+| `cerebro-db-password` | reused from the vault on reseed; generated on first seed; explicit operator override only for a deliberate rotation |
 | `global-mode`, `image-tag` | seeder flags |
 
 If a role assignment has not propagated, wait a few minutes and rerun the exact seeding
@@ -231,9 +243,15 @@ in a ticket.
 
 - **Rotate secrets:** rerun `seed-secrets.sh`, then `activate.sh`. Old Key Vault versions
   remain recoverable under vault policy, while only current values reach the VM.
-- **Deploy an image:** publish the reviewed SHA to the registry, seed that immutable SHA as
-  `--image-tag`, and activate. The five-minute timer also follows the configured tag.
-- **Rollback:** seed `--image-tag last-good` only after confirming the local tag exists,
+- **Deploy an image:** `.github/workflows/deploy.yml` runs on weekday mornings and on
+  demand. It resolves the newest `main` commit with a published image, compares it with the
+  vault's `image-tag`, and if they differ sets the tag and runs the shared
+  `scripts/activate-remote.sh` payload on the VM through Run Command, then the pilot
+  preflight. If activation or preflight fails it restores the previous tag and re-activates.
+  The manual equivalent is to seed the immutable SHA as `--image-tag` and run `activate.sh`.
+  The VM's five-minute timer follows whichever tag is configured.
+- **Rollback:** run `deploy.yml` from the Actions tab with `image_tag` set to the previous
+  SHA. Locally, seed `--image-tag last-good` only after confirming the local tag exists,
   activate, and confirm `/ready`; then restore a reviewed immutable SHA.
 - **Recover a VM:** Terraform may replace the VM. The managed disk is separately retained,
   reattached at LUN 0, and remounted by bootstrap. Review the plan before replacement.

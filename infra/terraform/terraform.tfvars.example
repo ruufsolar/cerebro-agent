@@ -8,6 +8,9 @@ admin_username            = "cerebroadmin"
 admin_ssh_public_key      = "ssh-ed25519 AAAA... senior-or-breakglass-key"
 secret_operator_object_id = "00000000-0000-0000-0000-000000000000"
 data_disk_size_gb         = 64
+# gh api repos/ruufsolar/cerebro-agent --jq '{owner_id: .owner.id, repository_id: .id}'
+github_owner_id           = 116316151
+github_repository_id      = 1349707290
 
 tags = {
   environment = "production"

@@ -240,13 +240,41 @@ resource "azurerm_user_assigned_identity" "ci" {
   tags                = var.tags
 }
 
+# GitHub now presents an ID-qualified subject (owner@id/repo@id) by default so that a
+# renamed or re-created repository cannot inherit trust. Trust both that form and the
+# plain owner/repo form, so the credential keeps working whichever the repository sends.
+locals {
+  github_owner = split("/", var.github_repository)[0]
+  github_repo  = split("/", var.github_repository)[1]
+  github_subject_prefixes = {
+    plain = "repo:${var.github_repository}"
+    ids   = "repo:${local.github_owner}@${var.github_owner_id}/${local.github_repo}@${var.github_repository_id}"
+  }
+  # Publish identity: pushes from the main branch.
+  github_oidc_subjects = {
+    "github-main"     = "${local.github_subject_prefixes.plain}:ref:refs/heads/main"
+    "github-main-ids" = "${local.github_subject_prefixes.ids}:ref:refs/heads/main"
+  }
+  # Deploy identity: jobs bound to the protected GitHub environment, whatever branch they run on.
+  github_deploy_subjects = {
+    "github-${var.github_deploy_environment}"     = "${local.github_subject_prefixes.plain}:environment:${var.github_deploy_environment}"
+    "github-${var.github_deploy_environment}-ids" = "${local.github_subject_prefixes.ids}:environment:${var.github_deploy_environment}"
+  }
+}
+
+moved {
+  from = azurerm_federated_identity_credential.ci_main
+  to   = azurerm_federated_identity_credential.ci_main["github-main"]
+}
+
 resource "azurerm_federated_identity_credential" "ci_main" {
-  name                = "github-main"
+  for_each            = local.github_oidc_subjects
+  name                = each.key
   resource_group_name = azurerm_resource_group.cerebro.name
   parent_id           = azurerm_user_assigned_identity.ci.id
   audience            = ["api://AzureADTokenExchange"]
   issuer              = "https://token.actions.githubusercontent.com"
-  subject             = "repo:${var.github_repository}:ref:refs/heads/main"
+  subject             = each.value
 }
 
 resource "azurerm_role_assignment" "ci_acr_push" {
@@ -254,4 +282,69 @@ resource "azurerm_role_assignment" "ci_acr_push" {
   role_definition_name = "AcrPush"
   principal_id         = azurerm_user_assigned_identity.ci.principal_id
   principal_type       = "ServicePrincipal"
+}
+
+# Deploy identity for the scheduled production workflow. Kept separate from the publish
+# identity so the credential that can push images cannot change what production runs, and
+# the credential that changes production cannot push images. It is trusted only from the
+# GitHub environment named in var.github_deploy_environment, so that environment's
+# protection rules gate every production change.
+resource "azurerm_user_assigned_identity" "deploy" {
+  name                = "${var.name_prefix}-deploy"
+  location            = azurerm_resource_group.cerebro.location
+  resource_group_name = azurerm_resource_group.cerebro.name
+  tags                = var.tags
+}
+
+resource "azurerm_federated_identity_credential" "deploy" {
+  for_each            = local.github_deploy_subjects
+  name                = each.key
+  resource_group_name = azurerm_resource_group.cerebro.name
+  parent_id           = azurerm_user_assigned_identity.deploy.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = "https://token.actions.githubusercontent.com"
+  subject             = each.value
+}
+
+# The workflow changes only the image-tag secret, but Key Vault RBAC at secret scope needs
+# the secret to exist first, which the seeder creates after apply. Vault-wide Secrets Officer
+# keeps a fresh deployment orderable; Run Command below already implies root on the VM, where
+# the same secrets are decrypted, so a narrower vault scope would not reduce real exposure.
+resource "azurerm_role_assignment" "deploy_secrets_officer" {
+  scope                = azurerm_key_vault.cerebro.id
+  role_definition_name = "Key Vault Secrets Officer"
+  principal_id         = azurerm_user_assigned_identity.deploy.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Confirms the resolved tag exists in the registry before pointing production at it.
+resource "azurerm_role_assignment" "deploy_acr_pull" {
+  scope                = azurerm_container_registry.cerebro.id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_user_assigned_identity.deploy.principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Just enough to invoke Run Command on this one VM; Virtual Machine Contributor would also
+# allow resizing, deleting, or re-imaging it.
+resource "azurerm_role_definition" "vm_run_command" {
+  name        = "${var.name_prefix}-vm-run-command"
+  scope       = azurerm_linux_virtual_machine.runtime.id
+  description = "Invoke Run Command on the Cerebro production VM."
+
+  permissions {
+    actions = [
+      "Microsoft.Compute/virtualMachines/read",
+      "Microsoft.Compute/virtualMachines/runCommand/action",
+    ]
+  }
+
+  assignable_scopes = [azurerm_linux_virtual_machine.runtime.id]
+}
+
+resource "azurerm_role_assignment" "deploy_vm_run_command" {
+  scope              = azurerm_linux_virtual_machine.runtime.id
+  role_definition_id = azurerm_role_definition.vm_run_command.role_definition_resource_id
+  principal_id       = azurerm_user_assigned_identity.deploy.principal_id
+  principal_type     = "ServicePrincipal"
 }
