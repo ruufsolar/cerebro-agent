@@ -11,7 +11,7 @@ KNOWLEDGE_DIR = Path(__file__).parents[2] / "knowledge"
 def test_knowledge_scope_and_catalog_are_versioned_and_complete() -> None:
     knowledge = load_knowledge(KNOWLEDGE_DIR)
 
-    assert knowledge.scope.version == 2
+    assert knowledge.scope.version == 3
     assert knowledge.catalog.version == 3
     assert knowledge.scope.relation_names == set(knowledge.catalog.relations)
     assert {

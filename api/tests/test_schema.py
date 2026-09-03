@@ -8,6 +8,7 @@ def test_foundation_schema_contains_auditable_agent_state() -> None:
         "conversation",
         "feedback",
         "message",
+        "runtime_heartbeat",
         "slack_event",
         "slack_output",
         "tool_call",

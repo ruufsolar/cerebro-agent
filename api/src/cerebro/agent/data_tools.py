@@ -8,6 +8,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, Field, WithJsonSchema, model_validator
 
+from cerebro.agent.models import EvidenceKind, EvidenceSignal
+
 ToolDecimal = Annotated[
     Decimal,
     Field(gt=0),
@@ -30,8 +32,7 @@ class InvestigationCandidate(BaseModel):
     account_receivable_summary: str | None = None
     outstanding_amount: Decimal | None = None
     currency: str | None = None
-    evidence: list[str] = Field(default_factory=list)
-    contradictions: list[str] = Field(default_factory=list)
+    evidence: list[EvidenceSignal] = Field(default_factory=list)
     verified: bool = False
 
 
@@ -40,11 +41,18 @@ class ToolObservation(BaseModel):
     available: bool
     summary: str
     candidates: list[InvestigationCandidate] = Field(default_factory=list)
+    evidence: list[EvidenceSignal] = Field(default_factory=list)
     rows: list[dict[str, object]] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     audit: ToolAuditMetadata = Field(default_factory=ToolAuditMetadata, exclude=True)
 
     def safe_audit_summary(self) -> dict[str, object]:
+        signals = [*self.evidence]
+        for candidate in self.candidates:
+            signals.extend(candidate.evidence)
+        evidence_kinds: dict[str, int] = {}
+        for signal in signals:
+            evidence_kinds[signal.kind.value] = evidence_kinds.get(signal.kind.value, 0) + 1
         return {
             "source": self.source,
             "available": self.available,
@@ -52,6 +60,7 @@ class ToolObservation(BaseModel):
             "row_count": self.audit.row_count,
             "truncated": self.audit.truncated,
             "limitation_count": len(self.limitations),
+            "evidence_kinds": evidence_kinds,
         }
 
 
@@ -208,10 +217,11 @@ class FixtureInvestigationData(EmptyInvestigationData):
         self._observations = dict(observations)
 
     def _get(self, name: str) -> ToolObservation:
-        return self._observations.get(
+        observation = self._observations.get(
             name,
             ToolObservation(source=name, available=True, summary="Sin coincidencias sintéticas."),
         )
+        return observation.model_copy(deep=True)
 
     async def read_finops_knowledge(self, request: KnowledgeQuery) -> ToolObservation:
         del request
@@ -222,16 +232,53 @@ class FixtureInvestigationData(EmptyInvestigationData):
         return self._get("database_schema")
 
     async def search_payment_candidates(self, request: PaymentCandidateQuery) -> ToolObservation:
-        del request
-        return self._get("payment_candidates")
+        observation = self._get("payment_candidates")
+        if not observation.available:
+            return observation
+        amount_only = not any(
+            (
+                request.glosa_or_address,
+                request.transferor_name,
+                request.transferor_rut,
+                request.origin_account_number,
+                request.email,
+                request.phone,
+            )
+        )
+        if amount_only and request.amount is not None:
+            observation.candidates = [
+                candidate
+                for candidate in observation.candidates
+                if candidate.outstanding_amount == request.amount
+                and (request.currency or "CLP") == candidate.currency
+            ]
+        observation.audit.row_count = len(observation.candidates)
+        return observation
 
     async def verify_payment_candidate(self, request: VerifyCandidateQuery) -> ToolObservation:
-        del request
-        return self._get("candidate_verification")
+        observation = self._get("candidate_verification")
+        observation.candidates = [
+            candidate
+            for candidate in observation.candidates
+            if candidate.order_id == request.order_id
+            and (
+                request.account_receivable_id is None
+                or candidate.account_receivable_id == request.account_receivable_id
+            )
+        ]
+        observation.audit.row_count = len(observation.candidates)
+        return observation
 
     async def search_vambe_messages(self, request: VambeQuery) -> ToolObservation:
-        del request
-        return self._get("vambe")
+        observation = self._get("vambe")
+        if request.order_id:
+            observation.evidence = [
+                signal
+                for signal in observation.evidence
+                if signal.order_id in {None, str(request.order_id)}
+                and signal.kind is EvidenceKind.VAMBE_CONTEXT
+            ]
+        return observation
 
     async def run_readonly_sql(self, request: ReadonlySqlQuery) -> ToolObservation:
         del request

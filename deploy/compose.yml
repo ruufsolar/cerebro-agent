@@ -1,17 +1,25 @@
-# Installed at /etc/cerebro-agent/compose.yml on the baseline VM.
+# Installed at /etc/cerebro-agent/compose.yml on the approved production VM.
 # /etc/cerebro-agent/env         -> container CEREBRO_* settings/secrets
 # /etc/cerebro-agent/compose.env -> interpolation only: DB password and image tag
 
 name: cerebro-agent
 
+x-logging: &capped-logs
+  logging:
+    driver: json-file
+    options:
+      max-size: "20m"
+      max-file: "3"
+
 services:
   web:
+    <<: *capped-logs
     image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
+    mem_limit: ${CEREBRO_WEB_MEM:-512m}
     command: >
       sh -c "cd /app/api && alembic upgrade head
       && python -m cerebro.jobs.schema
-      && exec uvicorn cerebro.main:app --host 0.0.0.0 --port 8000
-      --proxy-headers --forwarded-allow-ips '*'"
+      && exec python -m cerebro.web"
     env_file: ${CEREBRO_ENV_FILE:-/etc/cerebro-agent/env}
     ports:
       - "127.0.0.1:8010:8000"
@@ -25,26 +33,46 @@ services:
       retries: 5
     restart: unless-stopped
 
-  worker:
+  control-worker:
+    <<: *capped-logs
     image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
-    command: python -m cerebro.worker
+    mem_limit: ${CEREBRO_CONTROL_WORKER_MEM:-512m}
+    command: python -m cerebro.worker --role control
     env_file: ${CEREBRO_ENV_FILE:-/etc/cerebro-agent/env}
     depends_on:
       web:
         condition: service_healthy
+    stop_grace_period: 240s
+    restart: unless-stopped
+
+  agent-worker:
+    <<: *capped-logs
+    image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
+    mem_limit: ${CEREBRO_AGENT_WORKER_MEM:-1536m}
+    command: python -m cerebro.worker --role agent
+    env_file: ${CEREBRO_ENV_FILE:-/etc/cerebro-agent/env}
+    depends_on:
+      web:
+        condition: service_healthy
+    stop_grace_period: 240s
     restart: unless-stopped
 
   slack:
+    <<: *capped-logs
     image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
+    mem_limit: ${CEREBRO_SLACK_MEM:-384m}
     command: python -m cerebro.slack.socket
     env_file: ${CEREBRO_ENV_FILE:-/etc/cerebro-agent/env}
     depends_on:
       web:
         condition: service_healthy
+    stop_grace_period: 240s
     restart: unless-stopped
 
   db:
+    <<: *capped-logs
     image: postgres:18
+    mem_limit: ${CEREBRO_DB_MEM:-1024m}
     environment:
       POSTGRES_USER: cerebro
       POSTGRES_PASSWORD: ${CEREBRO_DB_PASSWORD:?set CEREBRO_DB_PASSWORD in /etc/cerebro-agent/compose.env}

@@ -187,3 +187,19 @@ class Feedback(Base):
         ),
         Index("ix_feedback_run", "agent_run_id"),
     )
+
+
+class RuntimeHeartbeat(Base):
+    """Non-customer runtime presence used by the pilot readiness check."""
+
+    __tablename__ = "runtime_heartbeat"
+
+    component: Mapped[str] = mapped_column(Text, primary_key=True)
+    instance_id: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text)
+    version: Mapped[str] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+    last_seen_at: Mapped[datetime] = mapped_column(server_default=text("now()"))
+    detail_code: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (Index("ix_runtime_heartbeat_last_seen", "last_seen_at"),)

@@ -1,15 +1,13 @@
-from logging.config import fileConfig
-
 from alembic import context
 from sqlalchemy import engine_from_config, pool
 
 from cerebro.config import get_config
 from cerebro.db import models  # noqa: F401
 from cerebro.db.base import Base
+from cerebro.observability import configure_logging
 
 config = context.config
-if config.config_file_name is not None:
-    fileConfig(config.config_file_name, disable_existing_loggers=False)
+configure_logging("migration", get_config())
 
 target_metadata = Base.metadata
 

@@ -1,5 +1,5 @@
 #!/bin/bash
-# One-time setup on the Wattson baseline VM. Run as root from a reviewed checkout.
+# One-time setup on an approved Cerebro VM. Run as root from a reviewed checkout or cloud-init.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,7 +21,9 @@ install -m 755 "$HERE/cerebro-agent-backup.sh" /usr/local/bin/cerebro-agent-back
 install -m 644 "$HERE"/systemd/cerebro-agent-*.service \
   "$HERE"/systemd/cerebro-agent-*.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now cerebro-agent-update.timer cerebro-agent-backup.timer
+if [ "${CEREBRO_BOOTSTRAP_DEFER_TIMERS:-false}" != "true" ]; then
+  systemctl enable --now cerebro-agent-update.timer cerebro-agent-backup.timer
+fi
 
 echo "Bootstrap complete. Fill /etc/cerebro-agent/env and compose.env, authenticate GHCR,"
-echo "then run /usr/local/bin/cerebro-agent-update.sh and curl localhost:8010/health."
+echo "then run /usr/local/bin/cerebro-agent-update.sh and curl localhost:8010/ready."

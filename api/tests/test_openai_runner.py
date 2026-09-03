@@ -22,7 +22,16 @@ from cerebro.agent.data_tools import (
     ToolObservation,
     VerifyCandidateQuery,
 )
-from cerebro.agent.models import CompletionReason, Confidence
+from cerebro.agent.models import (
+    CompletionReason,
+    Confidence,
+    EvidenceKind,
+    EvidencePolarity,
+    EvidenceSignal,
+    EvidenceSource,
+    EvidenceStrength,
+    IdentificationOutcome,
+)
 from cerebro.agent.openai_runner import (
     ModelCandidate,
     ModelIdentification,
@@ -92,14 +101,14 @@ async def test_responses_default_and_chat_fallback_use_exact_deployment() -> Non
         AppConfig(
             azure_openai_endpoint="https://example.test",
             azure_openai_api_key="test",
-            azure_deployment_main="gpt-5-6-sol",
+            azure_deployment_main="gpt-5-6-luna",
         )
     )
     chat = OpenAIAgentsRunner(
         AppConfig(
             azure_openai_endpoint="https://example.test",
             azure_openai_api_key="test",
-            azure_deployment_main="gpt-5-6-sol",
+            azure_deployment_main="gpt-5-6-luna",
             azure_openai_use_responses=False,
         )
     )
@@ -108,8 +117,8 @@ async def test_responses_default_and_chat_fallback_use_exact_deployment() -> Non
         chat_model = chat._model()
         assert isinstance(responses_model, OpenAIResponsesModel)
         assert isinstance(chat_model, OpenAIChatCompletionsModel)
-        assert responses_model.model == "gpt-5-6-sol"
-        assert chat_model.model == "gpt-5-6-sol"
+        assert responses_model.model == "gpt-5-6-luna"
+        assert chat_model.model == "gpt-5-6-luna"
     finally:
         await responses.close()
         await chat.close()
@@ -199,13 +208,43 @@ async def test_tool_budget_and_candidate_ledger() -> None:
             source="fixture",
             available=True,
             summary="match",
-            candidates=[InvestigationCandidate(customer_name="María", order_id=ORDER_UUID)],
+            candidates=[
+                InvestigationCandidate(
+                    customer_name="María",
+                    order_id=ORDER_UUID,
+                    evidence=[
+                        EvidenceSignal(
+                            kind=EvidenceKind.CUSTOMER_NAME,
+                            source=EvidenceSource.PAYMENT_CANDIDATES,
+                            polarity=EvidencePolarity.SUPPORTING,
+                            strength=EvidenceStrength.MEDIUM,
+                            description="El nombre coincide.",
+                            order_id=ORDER_ID,
+                        )
+                    ],
+                )
+            ],
         )
 
-    await state.invoke("candidates", PaymentCandidateQuery(transferor_name="María"), lookup)
+    raw = await state.invoke(
+        "search_payment_candidates", PaymentCandidateQuery(transferor_name="María"), lookup
+    )
     assert state.candidate_order_ids == {ORDER_ID}
+    assert list(state.evidence) == ["ev_001"]
+    assert json.loads(raw)["candidates"][0]["evidence"][0]["evidence_id"] == "ev_001"
+    assert state.calls[0].output == {
+        "source": "fixture",
+        "available": True,
+        "candidate_count": 1,
+        "row_count": None,
+        "truncated": None,
+        "limitation_count": 0,
+        "evidence_kinds": {"customer_name": 1},
+    }
     with pytest.raises(ToolBudgetExceeded):
-        await state.invoke("candidates", PaymentCandidateQuery(transferor_name="otra"), lookup)
+        await state.invoke(
+            "search_payment_candidates", PaymentCandidateQuery(transferor_name="otra"), lookup
+        )
 
 
 async def test_model_candidates_require_tool_support_and_url_is_application_owned() -> None:
@@ -215,37 +254,278 @@ async def test_model_candidates_require_tool_support_and_url_is_application_owne
     )
     client = AsyncOpenAI(api_key="test", base_url="https://example.test/v1/")
     runner = OpenAIAgentsRunner(config, client=client)
+    signal = EvidenceSignal(
+        evidence_id="ev_001",
+        kind=EvidenceKind.EXACT_ADDRESS,
+        source=EvidenceSource.CANDIDATE_VERIFICATION,
+        polarity=EvidencePolarity.SUPPORTING,
+        strength=EvidenceStrength.STRONG,
+        description="La glosa coincide con la dirección completa de instalación.",
+        order_id=ORDER_ID,
+        account_receivable_id=RECEIVABLE_ID,
+    )
     output = ModelIdentification(
+        outcome=IdentificationOutcome.MATCHED,
         recommended_customer=ModelCandidate(
-            customer_name="Nombre inventado por el modelo",
             order_id=ORDER_ID,
             account_receivable_id=RECEIVABLE_ID,
-            reason="dirección exacta",
+            evidence_ids=[signal.evidence_id],
         ),
-        account_receivable_summary="Resumen inventado por el modelo",
-        confidence=Confidence.HIGH,
-        investigation_summary="Coincidencia.",
     )
     try:
         unsupported = runner._map_output(output, RunState(max_tool_calls=1))
         supported_state = RunState(max_tool_calls=1, candidate_order_ids={ORDER_ID})
-        supported_state.verified_candidates[(ORDER_ID, RECEIVABLE_ID)] = InvestigationCandidate(
+        verified = InvestigationCandidate(
             customer_name="María Solar",
             order_id=ORDER_UUID,
             account_receivable_id=RECEIVABLE_UUID,
             account_receivable_summary="cash; saldo pendiente 700000 CLP",
             outstanding_amount=Decimal("700000"),
             currency="CLP",
+            evidence=[signal],
             verified=True,
         )
+        supported_state.candidates[(ORDER_ID, RECEIVABLE_ID)] = verified
+        supported_state.verified_candidates[(ORDER_ID, RECEIVABLE_ID)] = verified
+        supported_state.evidence[signal.evidence_id] = signal
         supported = runner._map_output(output, supported_state)
     finally:
         await runner.close()
     assert unsupported.confidence is Confidence.UNKNOWN
+    assert unsupported.outcome is IdentificationOutcome.AMBIGUOUS
+    assert supported.outcome is IdentificationOutcome.MATCHED
     assert supported.recommended_customer is not None
     assert supported.recommended_customer.customer_name == "María Solar"
     assert supported.recommended_customer.crm_url.endswith(f"/{ORDER_ID}")
     assert supported.account_receivable_summary == "cash; saldo pendiente 700000 CLP"
+
+
+@pytest.mark.parametrize(
+    ("kinds", "expected_outcome", "expected_confidence"),
+    [
+        (
+            [EvidenceKind.CUSTOMER_NAME],
+            IdentificationOutcome.MATCHED,
+            Confidence.MEDIUM,
+        ),
+        (
+            [EvidenceKind.EXACT_OUTSTANDING],
+            IdentificationOutcome.AMBIGUOUS,
+            Confidence.UNKNOWN,
+        ),
+        (
+            [EvidenceKind.CUSTOMER_NAME, EvidenceKind.CURRENCY_MISMATCH],
+            IdentificationOutcome.AMBIGUOUS,
+            Confidence.UNKNOWN,
+        ),
+    ],
+)
+async def test_application_owns_confidence_and_abstention(
+    kinds: list[EvidenceKind],
+    expected_outcome: IdentificationOutcome,
+    expected_confidence: Confidence,
+) -> None:
+    signals = [
+        EvidenceSignal(
+            evidence_id=f"ev_{index:03d}",
+            kind=kind,
+            source=EvidenceSource.CANDIDATE_VERIFICATION,
+            polarity=(
+                EvidencePolarity.CONTRADICTING
+                if kind is EvidenceKind.CURRENCY_MISMATCH
+                else EvidencePolarity.SUPPORTING
+            ),
+            strength=(
+                EvidenceStrength.STRONG
+                if kind is EvidenceKind.CURRENCY_MISMATCH
+                else EvidenceStrength.MEDIUM
+            ),
+            description=f"Evidencia canónica {kind.value}.",
+            order_id=ORDER_ID,
+            account_receivable_id=RECEIVABLE_ID,
+        )
+        for index, kind in enumerate(kinds, start=1)
+    ]
+    candidate = InvestigationCandidate(
+        customer_name="María Solar",
+        order_id=ORDER_UUID,
+        account_receivable_id=RECEIVABLE_UUID,
+        account_receivable_summary="saldo pendiente 700000 CLP",
+        evidence=signals,
+        verified=True,
+    )
+    state = RunState(max_tool_calls=1)
+    state.candidates[(ORDER_ID, RECEIVABLE_ID)] = candidate
+    state.verified_candidates[(ORDER_ID, RECEIVABLE_ID)] = candidate
+    state.evidence = {signal.evidence_id: signal for signal in signals}
+    output = ModelIdentification(
+        outcome=IdentificationOutcome.MATCHED,
+        recommended_customer=ModelCandidate(
+            order_id=ORDER_ID,
+            account_receivable_id=RECEIVABLE_ID,
+            evidence_ids=[signal.evidence_id for signal in signals],
+        ),
+    )
+    runner = OpenAIAgentsRunner(
+        AppConfig(azure_openai_endpoint="https://example.test", azure_openai_api_key="test"),
+        client=AsyncOpenAI(api_key="test", base_url="https://example.test/v1/"),
+    )
+    try:
+        result = runner._map_output(output, state)
+    finally:
+        await runner.close()
+
+    assert result.outcome is expected_outcome
+    assert result.confidence is expected_confidence
+
+
+async def test_no_customer_requires_a_conclusive_available_search() -> None:
+    runner = OpenAIAgentsRunner(
+        AppConfig(azure_openai_endpoint="https://example.test", azure_openai_api_key="test"),
+        client=AsyncOpenAI(api_key="test", base_url="https://example.test/v1/"),
+    )
+    output = ModelIdentification(outcome=IdentificationOutcome.NO_CUSTOMER_FOUND)
+    amount_only = RunState(
+        max_tool_calls=1,
+        candidate_search_succeeded=True,
+        candidate_search_count=0,
+        candidate_search_conclusive=False,
+    )
+    identity_search = RunState(
+        max_tool_calls=1,
+        candidate_search_succeeded=True,
+        candidate_search_count=0,
+        candidate_search_conclusive=True,
+    )
+    try:
+        ambiguous = runner._map_output(output, amount_only)
+        no_customer = runner._map_output(output, identity_search)
+    finally:
+        await runner.close()
+
+    assert ambiguous.outcome is IdentificationOutcome.AMBIGUOUS
+    assert no_customer.outcome is IdentificationOutcome.NO_CUSTOMER_FOUND
+
+
+async def test_no_customer_cannot_hide_a_candidate_from_an_earlier_search() -> None:
+    state = RunState(max_tool_calls=2)
+
+    async def search_with_candidate(request: PaymentCandidateQuery) -> ToolObservation:
+        del request
+        return ToolObservation(
+            source="payment_candidates",
+            available=True,
+            summary="candidate",
+            candidates=[
+                InvestigationCandidate(
+                    customer_name="Cliente",
+                    order_id=ORDER_UUID,
+                    account_receivable_id=RECEIVABLE_UUID,
+                )
+            ],
+        )
+
+    async def empty_search(request: PaymentCandidateQuery) -> ToolObservation:
+        del request
+        return ToolObservation(source="payment_candidates", available=True, summary="empty")
+
+    await state.invoke(
+        "search_payment_candidates",
+        PaymentCandidateQuery(transferor_name="Cliente"),
+        search_with_candidate,
+    )
+    await state.invoke(
+        "search_payment_candidates",
+        PaymentCandidateQuery(glosa_or_address="otra señal"),
+        empty_search,
+    )
+
+    assert state.candidate_search_count == 1
+    assert state.candidate_search_conclusive is True
+
+
+async def test_only_verified_competitors_can_force_ambiguity() -> None:
+    runner = OpenAIAgentsRunner(
+        AppConfig(azure_openai_endpoint="https://example.test", azure_openai_api_key="test"),
+        client=AsyncOpenAI(api_key="test", base_url="https://example.test/v1/"),
+    )
+    chosen_signal = EvidenceSignal(
+        evidence_id="ev_001",
+        kind=EvidenceKind.CUSTOMER_NAME,
+        source=EvidenceSource.CANDIDATE_VERIFICATION,
+        polarity=EvidencePolarity.SUPPORTING,
+        strength=EvidenceStrength.MEDIUM,
+        description="El nombre coincide.",
+        order_id=ORDER_ID,
+        account_receivable_id=RECEIVABLE_ID,
+    )
+    other_order = UUID("50000000-0000-0000-0000-000000000002")
+    other_receivable = UUID("a0000000-0000-0000-0000-000000000002")
+    other_signal = chosen_signal.model_copy(
+        update={
+            "evidence_id": "ev_002",
+            "order_id": str(other_order),
+            "account_receivable_id": str(other_receivable),
+        }
+    )
+    chosen = InvestigationCandidate(
+        customer_name="Cliente elegido",
+        order_id=ORDER_UUID,
+        account_receivable_id=RECEIVABLE_UUID,
+        evidence=[chosen_signal],
+        verified=True,
+    )
+    unverified = InvestigationCandidate(
+        customer_name="Candidato sin verificar",
+        order_id=other_order,
+        account_receivable_id=other_receivable,
+        evidence=[other_signal],
+        verified=False,
+    )
+    state = RunState(max_tool_calls=1)
+    state.candidates[(ORDER_ID, RECEIVABLE_ID)] = chosen
+    state.candidates[(str(other_order), str(other_receivable))] = unverified
+    state.verified_candidates[(ORDER_ID, RECEIVABLE_ID)] = chosen
+    state.evidence = {"ev_001": chosen_signal, "ev_002": other_signal}
+    output = ModelIdentification(
+        outcome=IdentificationOutcome.MATCHED,
+        recommended_customer=ModelCandidate(
+            order_id=ORDER_ID,
+            account_receivable_id=RECEIVABLE_ID,
+            evidence_ids=["ev_001"],
+        ),
+    )
+    try:
+        result = runner._map_output(output, state)
+    finally:
+        await runner.close()
+
+    assert result.outcome is IdentificationOutcome.MATCHED
+
+
+def test_evidence_deduplication_keeps_equal_signals_for_distinct_candidates() -> None:
+    first = EvidenceSignal(
+        evidence_id="ev_001",
+        kind=EvidenceKind.CUSTOMER_NAME,
+        source=EvidenceSource.PAYMENT_CANDIDATES,
+        polarity=EvidencePolarity.SUPPORTING,
+        strength=EvidenceStrength.MEDIUM,
+        description="El nombre coincide.",
+        order_id=ORDER_ID,
+        account_receivable_id=RECEIVABLE_ID,
+    )
+    second = first.model_copy(
+        update={
+            "evidence_id": "ev_002",
+            "order_id": "50000000-0000-0000-0000-000000000002",
+            "account_receivable_id": "a0000000-0000-0000-0000-000000000002",
+        }
+    )
+    repeated_after_verification = first.model_copy(update={"evidence_id": "ev_003"})
+
+    assert OpenAIAgentsRunner._deduplicate_signals(
+        [first, second, repeated_after_verification]
+    ) == [first, second, repeated_after_verification]
 
 
 async def test_only_verification_tool_authorizes_a_recommendation() -> None:
@@ -344,7 +624,7 @@ async def test_safe_sdk_outcomes_return_unknown(
         await runner.close()
     assert result.identification.confidence is Confidence.UNKNOWN
     assert result.completion_reason is reason
-    assert result.prompt_version == "payment-identification-slice4-v1"
+    assert result.prompt_version == "payment-identification-slice5-v1"
 
 
 async def test_success_records_usage_and_disables_sensitive_tracing(
@@ -363,8 +643,7 @@ async def test_success_records_usage_and_disables_sensitive_tracing(
         def final_output_as(output_type: type[ModelIdentification], **kwargs: object) -> object:
             del output_type, kwargs
             return ModelIdentification(
-                confidence=Confidence.UNKNOWN,
-                investigation_summary="No hay fuentes reales.",
+                outcome=IdentificationOutcome.AMBIGUOUS,
             )
 
     async def succeed(*args: object, **kwargs: object) -> object:
@@ -404,7 +683,7 @@ async def test_success_records_usage_and_disables_sensitive_tracing(
     assert run_config.tracing_disabled is True
     assert run_config.trace_include_sensitive_data is False
     assert captured["max_turns"] == 8
-    assert result.usage.model == "gpt-5-6-sol"
+    assert result.usage.model == "gpt-5-6-luna"
     assert result.usage.input_tokens == 120
     assert result.usage.output_tokens == 30
     assert result.usage.turns == 2

@@ -30,7 +30,7 @@ V0 may:
 - read curated domain knowledge;
 - post a Slack thread reply and temporary native Slack status;
 - record runs, tool calls, delivery attempts, and reactions in Cerebro's own database;
-- emit metadata-only operational analytics to Cerebro's PostHog project.
+- keep operational analytics in privacy-safe local logs and Cerebro state during V0.
 
 V0 may not:
 

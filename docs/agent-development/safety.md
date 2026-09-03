@@ -13,8 +13,9 @@ prompt injection, incorrect data, or unnecessary PII.
 - Payment and hold hard switches default false.
 - Image count, bytes, MIME types, download origin, and lifetime are bounded.
 - Outputs are in the same internal thread and minimize exposed PII.
-- External tracing is disabled; PostHog receives metadata, not prompts, SQL rows, images,
-  RUTs, account numbers, phone, email, or addresses.
+- External tracing and external telemetry are disabled in V0. Local structured logs receive
+  categories/counts, not prompts, SQL rows, images, RUTs, account numbers, phone, email,
+  or addresses.
 - Slack event and delivery idempotency makes retries safe.
 
 ## Prompt-injection rule

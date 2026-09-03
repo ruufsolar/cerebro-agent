@@ -60,23 +60,38 @@ connection and FinOps case reconciliation remain rollout acceptance rather than 
 Acceptance: real bank screenshots feed the model, files disappear after every success/error,
 and logs/telemetry contain no bytes or OCR dump.
 
-## Slice 5 — live payment identification
+## Slice 5 — grounded payment identification (implemented; pilot pending)
 
-- Production prompt/knowledge version and heuristic precedence.
-- Candidate verification, contradictions, ranked alternatives, categorical confidence,
-  no-customer and “no sé” paths.
+- GPT-5.6 Luna default, production prompt/knowledge version, and heuristic precedence.
+- Typed evidence ledger, application-owned confidence/prose, contradictions, ranked verified
+  alternatives, and explicit matched/ambiguous/no-customer/out-of-scope outcomes.
+- Normalized address discovery and safe partial-payment/currency semantics.
 - Verified CRM URL and human-readable AR summary.
-- Real end-to-end Slack → replica/Vambe → answer flow.
+- Concise real end-to-end Slack → replica/Vambe → answer flow.
+- Twenty-case synthetic release gate and ten-case controlled FinOps Slack pilot.
 
 Acceptance: the Definition of V0 Done in `current-state.md`, core FinOps fixture suite, and
 manual pilot sign-off.
 
-## Slice 6 — V0 hardening and launch
+## Slice 6A — V0 pilot hardening
 
-- Metadata-only PostHog, structured logs, dashboards/alerts, retention settings.
-- Load/rate/retry/deploy-interruption tests and runbook exercise.
-- Shadow/pilot rollout, eval baseline, cost/latency thresholds, rollback drill.
-- Capability state becomes `live` only after approval.
+- Split control/agent queues, runtime heartbeats, foundation/pilot readiness, and safe
+  structured logs.
+- Local preflight/status/pilot commands, watchdog warnings, manual retention procedure, and
+  load/retry/deploy-interruption coverage.
+- Hard ten-case quality, latency, and token gates with a documented rollback drill.
+- PostHog and all external telemetry are deliberately excluded from V0.
+
+Implemented in code on 2026-09-02. The real pilot, rollback exercise, and FinOps signoff are
+still pending, so capability state remains preview.
+
+## Slice 6B — Launch decision
+
+- Have platform review and apply the dedicated Azure Terraform stack in mode `off`, then
+  complete production preflight and the `last-good` rollback exercise.
+- Run and review the ten-case FinOps pilot and the rollback drill.
+- Convert failures and representative successes into anonymized fixtures.
+- Promote payment identification only through explicit FinOps approval and a normal release.
 
 ## Later: actions and proactive flows
 

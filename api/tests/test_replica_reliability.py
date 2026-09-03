@@ -8,6 +8,7 @@ import asyncpg
 import pytest
 
 from cerebro.agent.data_tools import PaymentCandidateQuery
+from cerebro.agent.models import EvidenceKind
 from cerebro.config import AppConfig
 from cerebro.replica.database import QueryResult, ReplicaDatabase
 from cerebro.replica.investigation import ReplicaInvestigationData
@@ -124,5 +125,60 @@ async def test_candidate_search_stages_enrichment_and_uses_name_tokens_from_glos
     assert "payment_aggregates" not in database.query
     assert ["amigo"] in database.args
     assert observation.candidates[0].customer_name == "Alberto Amigo"
-    assert "parte del nombre del cliente (amigo)" in observation.candidates[0].evidence[0]
-    assert any("1428000" in evidence for evidence in observation.candidates[0].evidence)
+    assert observation.candidates[0].evidence[0].kind is EvidenceKind.CUSTOMER_NAME
+    assert any(
+        evidence.kind is EvidenceKind.EXACT_OUTSTANDING
+        for evidence in observation.candidates[0].evidence
+    )
+
+
+async def test_partial_amount_is_supporting_and_amount_only_search_stays_exact() -> None:
+    database = _CandidateDatabase()
+    knowledge = load_knowledge(KNOWLEDGE_DIR)
+    data = ReplicaInvestigationData(cast(ReplicaDatabase, database), knowledge, KNOWLEDGE_DIR)
+
+    observation = await data.search_payment_candidates(
+        PaymentCandidateQuery(
+            transferor_name="Alberto Amigo",
+            amount=Decimal("500000"),
+            currency="CLP",
+        )
+    )
+
+    kinds = {item.kind for item in observation.candidates[0].evidence}
+    assert EvidenceKind.CUSTOMER_NAME in kinds
+    assert EvidenceKind.PARTIAL_PAYMENT in kinds
+    assert EvidenceKind.AMOUNT_EXCEEDS_OUTSTANDING not in kinds
+    assert "outstanding_amount =" in database.query
+    assert "outstanding_amount >" not in database.query
+
+
+@pytest.mark.parametrize(
+    ("amount", "currency", "expected"),
+    [
+        (Decimal("1500000"), "CLP", EvidenceKind.AMOUNT_EXCEEDS_OUTSTANDING),
+        (Decimal("1428000"), "CLF", EvidenceKind.CURRENCY_MISMATCH),
+    ],
+)
+async def test_overpayment_and_currency_mismatch_are_contradictions(
+    amount: Decimal, currency: str, expected: EvidenceKind
+) -> None:
+    database = _CandidateDatabase()
+    data = ReplicaInvestigationData(
+        cast(ReplicaDatabase, database), load_knowledge(KNOWLEDGE_DIR), KNOWLEDGE_DIR
+    )
+
+    observation = await data.search_payment_candidates(
+        PaymentCandidateQuery(
+            transferor_name="Alberto Amigo",
+            amount=amount,
+            currency=cast(Any, currency),
+        )
+    )
+
+    contradictions = {
+        item.kind
+        for item in observation.candidates[0].evidence
+        if item.polarity.value == "contradicting"
+    }
+    assert expected in contradictions

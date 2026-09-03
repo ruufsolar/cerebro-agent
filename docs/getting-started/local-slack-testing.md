@@ -4,7 +4,7 @@ The Slack surface uses Socket Mode: Cerebro opens an outbound WebSocket to Slack
 need a public URL, port forwarding, ngrok, or Tailscale. Tailscale will become relevant only
 if a later slice reaches a private replica/network endpoint from your laptop.
 
-With Azure credentials and a verified replica DSN, Slice 4 can investigate text and static
+With Azure credentials and a verified replica DSN, Slice 5 can investigate text and static
 PNG/JPEG/WebP screenshots. Without the replica, tools explicitly report unavailable. Without
 Azure, the deterministic fake runs and intentionally does not download screenshots.
 
@@ -32,12 +32,14 @@ Azure, the deterministic fake runs and intentionally does not download screensho
    CEREBRO_SLACK_APP_TOKEN=xapp-your-secret
    CEREBRO_SLACK_BOT_TOKEN=xoxb-your-secret
    CEREBRO_GLOBAL_MODE=review
+   CEREBRO_READINESS_PROFILE=pilot
    ```
 
 Azure and replica credentials can remain empty for Slack-shell testing. To test real model
 reasoning, set both Azure endpoint and API key; setting only one makes the worker fail fast.
 To test real data, also set the dedicated `CEREBRO_READ_REPLICA_URL`. Production/staging
 must point to a physical replica using SSL; never substitute the primary DSN.
+Set `CEREBRO_AZURE_DEPLOYMENT_MAIN` to the Azure deployment serving GPT-5.6 Luna.
 
 ## Start Cerebro
 
@@ -47,20 +49,22 @@ From the repository root:
 docker compose -f deploy/compose.local.yml --profile slack up --build
 ```
 
-The profile starts four services: PostgreSQL, the health/migration service, the durable
-worker, and the outbound Slack Socket Mode process. Without `--profile slack`, the first
-three still start and no Slack credentials are required.
+The profile starts five services: PostgreSQL, web/migrations, isolated control and agent
+workers, and outbound Slack Socket Mode. Without `--profile slack`, set readiness to
+`foundation`; the other four services start without Slack credentials.
 
 In a second terminal:
 
 ```bash
 curl -fsS http://localhost:8000/health
+curl -fsS http://localhost:8000/ready
 docker compose -f deploy/compose.local.yml --profile slack ps
-docker compose -f deploy/compose.local.yml --profile slack logs -f slack worker
+docker compose -f deploy/compose.local.yml --profile slack logs -f slack control-worker agent-worker
 ```
 
-Health should report `"phase":"screenshot-vision"`; Slack logs should show a connected Socket
-Mode session, and worker logs should show no failed jobs.
+Health should report `"phase":"payment-identification-pilot"`; Slack logs should show a connected Socket
+Mode session, readiness should show all three runtime components `ok`, and worker logs
+should show no failed jobs.
 
 ## Acceptance script
 
@@ -69,7 +73,7 @@ Mode session, and worker logs should show no failed jobs.
 2. Confirm Cerebro shows native thread status and posts exactly one reply in that thread.
 3. Without a replica, confirm it reports unavailable sources and returns `unknown`. With
    Azure + replica, confirm any recommendation links to a CRM order returned by the
-   verification tool and includes the Slice 4 preview banner.
+   verification tool and includes the compact Slice 5 preview banner.
 4. Reply as a human in the same thread. Confirm a new investigation replies in that
    thread. A message in an unrelated thread must not trigger Cerebro.
 5. Add 🧀 to an investigation response. There should be no flavor reply.
@@ -80,11 +84,11 @@ Mode session, and worker logs should show no failed jobs.
    metadata (`id`, `name`, `mimetype`, `size`) and categorical ingestion counts, never
    `url_private`, thumbnails, local paths, Base64, or bytes.
 9. Attach one valid image plus a PDF, GIF, HEIC, oversized, or corrupt image. The valid image
-   should still be analyzed and the response must state exactly how many were not processed.
-10. In the worker container, confirm no run directories remain after both success and failure:
+   should still be analyzed and the concise response must state how many were not processed.
+10. In the agent-worker container, confirm no run directories remain after both success and failure:
 
    ```bash
-   docker compose -f deploy/compose.local.yml --profile slack exec worker \
+   docker compose -f deploy/compose.local.yml --profile slack exec agent-worker \
      find /tmp/cerebro-images -mindepth 1 -maxdepth 1 -type d -print
    ```
 
@@ -110,14 +114,14 @@ Restart the stack after changing `.env`. Keep `payment_writes_enabled` and
   docker compose -f deploy/compose.local.yml --profile slack up --build
   ```
 
-- Event arrives but no answer: inspect worker logs and the `slack_event.disposition`,
+- Event arrives but no answer: inspect both worker logs and the `slack_event.disposition`,
   `agent_run.status`, and `slack_output.status` rows.
 - Duplicate-looking behavior: check for competing consumers first, then verify the Slack
   event IDs/message timestamps; Cerebro has database uniqueness constraints at every stage.
 - Status API failure: the investigation should still finish. Check `assistant:write` and
   `chat:write` scopes before reinstalling.
 - Image appears ignored: confirm `files:read`, app reinstall timing, a Slack-hosted static
-  PNG/JPEG/WebP, the four-file/8 MiB limits, Azure configuration, and worker logs. PDFs,
+  PNG/JPEG/WebP, the four-file/8 MiB limits, Azure configuration, and agent-worker logs. PDFs,
   GIFs, HEIC, external files, animated/corrupt images, and images above 25 MP are rejected.
 
 Do not paste the output of `docker compose config` into chat or tickets: Compose expands

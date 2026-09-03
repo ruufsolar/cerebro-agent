@@ -11,12 +11,17 @@ payment registration and hold actions will use approval-gated monolith APIs.
 
 ## Current state
 
-Slice 4 is implemented: the bounded Agents SDK investigator can use a dedicated monolith
+Slice 6A is implemented in code: the bounded Agents SDK investigator can use a dedicated monolith
 read replica through six audited tools for policy/schema lookup, candidate search,
 candidate verification, Vambe context, and allowlisted SQL. A recommendation is accepted
 only after deterministic candidate verification. Static PNG/JPEG/WebP screenshots from the
 triggering Slack message are securely downloaded, validated, sent as high-detail ephemeral
-model input, and deleted. Without Azure credentials, the
+model input, and deleted. The configured model default is GPT-5.6 Luna. Tool evidence is
+referenced through per-run IDs, and application code owns outcomes, confidence, CRM links,
+ranking, and concise Spanish prose. Isolated control/agent workers, runtime readiness,
+privacy-safe local logs, and aggregate preflight/status/pilot tooling harden the pilot.
+The live eval and controlled FinOps pilot still gate
+promotion beyond preview. Without Azure credentials, the
 deterministic fake runner remains available; replica preflight and integration tests can
 still run independently with the synthetic profile.
 
@@ -26,6 +31,7 @@ Start with:
 - [Quickstart](docs/getting-started/quickstart.md)
 - [Current state](docs/product/current-state.md)
 - [External setup checklist](docs/operations/external-setup.md)
+- [Azure production Terraform](infra/terraform/README.md)
 - [Delivery plan](docs/delivery/vertical-slices.md)
 
 ## Local smoke test
@@ -34,6 +40,7 @@ Start with:
 cp deploy/env.example .env
 docker compose -f deploy/compose.local.yml up --build
 curl http://localhost:8000/health
+curl http://localhost:8000/ready
 ```
 
 To connect the existing Slack app, add its `xapp`/`xoxb` tokens to `.env`, set

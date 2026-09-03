@@ -1,0 +1,17 @@
+subscription_id           = "00000000-0000-0000-0000-000000000000"
+# Example only: replace with the region approved by Ruuf/platform.
+location                  = "eastus2"
+resource_group_name       = "rg-cerebro-prod"
+name_prefix               = "cerebro-prod"
+vm_size                   = "Standard_B2ms"
+admin_username            = "cerebroadmin"
+admin_ssh_public_key      = "ssh-ed25519 AAAA... senior-or-breakglass-key"
+secret_operator_object_id = "00000000-0000-0000-0000-000000000000"
+data_disk_size_gb         = 64
+
+tags = {
+  environment = "production"
+  managed-by  = "terraform"
+  owner       = "finops"
+  service     = "cerebro-agent"
+}

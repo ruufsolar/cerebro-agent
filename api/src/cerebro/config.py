@@ -1,5 +1,6 @@
 from enum import StrEnum
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -14,6 +15,13 @@ class GlobalMode(StrEnum):
     APPLY = "apply"
 
 
+class ReadinessProfile(StrEnum):
+    """Dependencies required before a deployment is considered ready."""
+
+    FOUNDATION = "foundation"
+    PILOT = "pilot"
+
+
 class AppConfig(BaseSettings):
     model_config = SettingsConfigDict(
         env_prefix="CEREBRO_",
@@ -24,6 +32,7 @@ class AppConfig(BaseSettings):
 
     environment: str = "local"
     log_level: str = "INFO"
+    log_format: Literal["json", "text"] = "json"
     database_url: str = "postgresql://cerebro@127.0.0.1:5432/cerebro"
     read_replica_url: str = ""
     allow_non_replica_readonly_db: bool = False
@@ -36,7 +45,7 @@ class AppConfig(BaseSettings):
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
     # These are Azure deployment names, not necessarily catalog model identifiers.
-    azure_deployment_main: str = "gpt-5-6-sol"
+    azure_deployment_main: str = "gpt-5-6-luna"
     azure_deployment_small: str = "gpt-5-6-luna"
     azure_openai_use_responses: bool = True
     azure_reasoning_effort: str = "medium"
@@ -59,10 +68,13 @@ class AppConfig(BaseSettings):
     image_temp_root: str = "/tmp/cerebro-images"
     slack_delivery_max_attempts: int = Field(default=3, ge=1, le=10)
 
+    readiness_profile: ReadinessProfile = ReadinessProfile.FOUNDATION
+    worker_concurrency: int = Field(default=2, ge=1, le=8)
+    runtime_heartbeat_seconds: int = Field(default=15, ge=5, le=60)
+    runtime_stale_seconds: int = Field(default=45, ge=15, le=300)
+
     crm_finops_base_url: str = "https://tutu.ruuf.cl/account-receivables/crm-finops"
     knowledge_dir: str = "../knowledge"
-    posthog_api_key: str = ""
-    posthog_host: str = "https://us.i.posthog.com"
     external_tracing_enabled: bool = False
     public_url: str = "http://localhost:8000"
 
@@ -90,6 +102,7 @@ class AppConfig(BaseSettings):
                 self.slack_app_token,
                 self.azure_openai_endpoint,
                 self.azure_openai_api_key,
+                self.azure_deployment_main,
                 self.read_replica_url,
             )
         )
@@ -108,6 +121,15 @@ class AppConfig(BaseSettings):
     @property
     def slack_ready(self) -> bool:
         return bool(self.slack_bot_token and self.slack_app_token)
+
+    @property
+    def pilot_configuration_ready(self) -> bool:
+        return bool(
+            self.live_agent_ready
+            and not self.payment_writes_enabled
+            and not self.hold_writes_enabled
+            and not self.external_tracing_enabled
+        )
 
 
 @lru_cache

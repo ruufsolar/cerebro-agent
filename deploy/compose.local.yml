@@ -7,7 +7,7 @@ services:
     command: >
       sh -c "cd /app/api && alembic upgrade head
       && python -m cerebro.jobs.schema
-      && exec uvicorn cerebro.main:app --host 0.0.0.0 --port 8000"
+      && exec python -m cerebro.web"
     env_file:
       - path: ../.env
         required: false
@@ -24,10 +24,10 @@ services:
       timeout: 5s
       retries: 10
 
-  worker:
+  control-worker:
     build:
       context: ..
-    command: python -m cerebro.worker
+    command: python -m cerebro.worker --role control
     env_file:
       - path: ../.env
         required: false
@@ -36,6 +36,21 @@ services:
     depends_on:
       web:
         condition: service_healthy
+    stop_grace_period: 240s
+
+  agent-worker:
+    build:
+      context: ..
+    command: python -m cerebro.worker --role agent
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      CEREBRO_DATABASE_URL: postgresql://cerebro:local-dev-only@db:5432/cerebro
+    depends_on:
+      web:
+        condition: service_healthy
+    stop_grace_period: 240s
 
   slack:
     profiles: ["slack"]
@@ -50,6 +65,7 @@ services:
     depends_on:
       web:
         condition: service_healthy
+    stop_grace_period: 240s
 
   db:
     image: postgres:18

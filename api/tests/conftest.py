@@ -13,6 +13,7 @@ from cerebro.db.models import (
     Conversation,
     Feedback,
     Message,
+    RuntimeHeartbeat,
     SlackEvent,
     SlackOutput,
     ToolCall,
@@ -38,6 +39,7 @@ async def clean_database() -> AsyncIterator[None]:
     await dispose_engine()
     async with open_session() as session:
         for model in (
+            RuntimeHeartbeat,
             Feedback,
             SlackOutput,
             ToolCall,

@@ -3,6 +3,7 @@ from procrastinate.schema import SchemaManager
 from sqlalchemy import create_engine, text
 
 from cerebro.config import get_config
+from cerebro.observability import configure_logging
 
 
 def ensure_procrastinate_schema() -> None:
@@ -24,4 +25,5 @@ def ensure_procrastinate_schema() -> None:
 
 
 if __name__ == "__main__":
+    configure_logging("job-schema")
     ensure_procrastinate_schema()

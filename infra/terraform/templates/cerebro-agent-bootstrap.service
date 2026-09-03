@@ -1,0 +1,17 @@
+[Unit]
+Description=Configure and activate Cerebro from Azure Key Vault
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/cerebro-vm-bootstrap.sh
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=60s
+TimeoutStartSec=1200
+
+[Install]
+WantedBy=multi-user.target

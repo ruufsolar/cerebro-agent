@@ -17,6 +17,7 @@ from cerebro.db.enums import (
 from cerebro.db.models import AgentRun, Conversation, Feedback, Message, SlackEvent, SlackOutput
 from cerebro.db.session import open_session
 from cerebro.jobs.enqueue import enqueue_agent_run, enqueue_slack_event, enqueue_slack_output
+from cerebro.observability import log_event
 from cerebro.slack.events import NormalizedSlackEvent, SlackEventKind
 
 logger = logging.getLogger(__name__)
@@ -253,14 +254,21 @@ async def process_stored_event(event_id: UUID) -> None:
                 event.processed_at = datetime.now(UTC)
             await session.commit()
     except Exception as exc:
-        logger.exception("failed to process Slack event %s", event_id)
+        log_event(
+            logger,
+            "slack_event_processing_failed",
+            level=logging.ERROR,
+            event_id=event_id,
+            error_type=type(exc).__name__,
+        )
         async with open_session() as session:
             event = await session.get(SlackEvent, event_id)
             if event:
                 event.disposition = SlackEventDisposition.FAILED
-                event.error = str(exc)[:2_000]
+                event.error = type(exc).__name__
                 await session.commit()
         raise
+    log_event(logger, "slack_event_processed", event_id=event_id)
     if run_to_enqueue:
         await enqueue_agent_run(*run_to_enqueue)
     if output_to_enqueue:

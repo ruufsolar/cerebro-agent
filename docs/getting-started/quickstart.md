@@ -3,10 +3,10 @@
 ## What the current service gives you
 
 - A Python 3.13 package managed by `uv`.
-- FastAPI `GET /health`.
+- FastAPI `GET /health` and foundation/pilot `GET /ready`.
 - PostgreSQL/Alembic tables for Slack events, conversations, runs, tool calls, outputs,
   and feedback.
-- Durable Procrastinate event/run/output jobs with periodic recovery.
+- Separate two-concurrency Procrastinate control/agent queues with recovery and watchdogs.
 - An Agents SDK runner using Azure Responses, plus a deterministic fallback fake.
 - Versioned prompt/knowledge, structured results, bounded turns/tools/deadline, and safe tool audit.
 - Optional read-replica pool with schema/role checks, deterministic candidate tools, Vambe,
@@ -15,9 +15,10 @@
 - Ephemeral Slack PNG/JPEG/WebP retrieval, byte validation, high-detail multimodal input,
   partial fallback, and guaranteed per-run cleanup.
 - Safe-off configuration and explicit future write switches.
+- Privacy-safe local structured logs and preflight/status/pilot operator commands.
 - CI, container, VM deployment, backup, and documentation skeletons.
 
-It does not yet emit PostHog events. Without a replica DSN, the live model reports sources
+V0 deliberately has no PostHog or external tracing. Without a replica DSN, the live model reports sources
 unavailable; with a verified replica DSN, text and triggering-message screenshots use real
 read-only data for verification.
 
@@ -27,9 +28,11 @@ read-only data for verification.
 cp deploy/env.example .env
 docker compose -f deploy/compose.local.yml up --build
 curl http://localhost:8000/health
+curl http://localhost:8000/ready
 ```
 
-Expected response includes `"status":"ok"` and `"phase":"screenshot-vision"`. The Slack process
+Expected health includes `"status":"ok"` and `"phase":"payment-identification-pilot"`.
+Foundation readiness should report `"status":"ready"`. The Slack process
 is opt-in; see [local Slack testing](local-slack-testing.md).
 
 ## Run with local Python
@@ -41,14 +44,15 @@ uv sync
 createdb cerebro
 uv run python -m cerebro.jobs.schema
 uv run alembic upgrade head
-uv run uvicorn cerebro.main:app --reload
+uv run python -m cerebro.web
 ```
 
-In another terminal:
+In two other terminals:
 
 ```bash
 cd api
-uv run python -m cerebro.worker
+uv run python -m cerebro.worker --role control
+uv run python -m cerebro.worker --role agent
 ```
 
 ## Verify
@@ -88,7 +92,8 @@ The fixture contains synthetic identities only. For the operator preflight, set
 `CEREBRO_ALLOW_NON_REPLICA_READONLY_DB=true`, then run
 `uv run python -m cerebro.replica.check`. Never enable that override outside local/test.
 
-## Next implementation slice
+## Next acceptance step
 
-Run Slice 5 from [vertical-slices.md](../delivery/vertical-slices.md): controlled real
-Slack/FinOps cases, expanded release-blocking evals, and pilot sign-off.
+Run the controlled ten-case pilot and gate from
+[Pilot operations](../operations/pilot-operations.md), complete the rollback drill, and
+obtain explicit FinOps signoff. Payment identification remains preview until then.

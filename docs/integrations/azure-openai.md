@@ -9,10 +9,10 @@ and state ownership remain in this repository; no persisted Foundry agent is req
 - Configure the Azure resource endpoint, API key (initially), and exact deployment names.
 - The `model` sent to Azure is the deployment name, which may differ from the catalog model
   ID. Do not silently substitute one for the other.
-- Main model should accept text and image input. A smaller deployment may later handle
-  cheap classification/rendering but V0 begins with one investigator.
-- Agents SDK tracing to external OpenAI endpoints stays disabled. PostHog receives only
-  selected metadata.
+- The Slice 5 default is an Azure deployment serving `gpt-5.6-luna`. The environment value
+  is the Azure deployment name, which may be different from that catalog model ID.
+- Agents SDK tracing to external OpenAI endpoints stays disabled. V0 has no external
+  telemetry destination; operational metadata remains in local logs/state.
 
 Microsoft recommends Microsoft Entra ID for production; API keys are acceptable to unblock
 the baseline when stored securely. The Azure v1 route is `<resource endpoint>/openai/v1/`
@@ -26,18 +26,18 @@ and [OpenAI model/vision availability](https://developers.openai.com/api/docs/mo
 - Pass validated image inputs directly; do not add a separate OCR vendor in V0.
 - Enforce overall timeout, maximum turns, and maximum tool calls in code.
 - Validate Pydantic output; one repair attempt can be allowed inside the same budget.
-- Record deployment, token usage, latency, prompt version, and errors without input/output
-  content in external telemetry.
+- Record deployment, token usage, latency, prompt version, and categorical errors in
+  Cerebro state without copying input/output content into logs.
 - Unit tests inject the fake and never require Azure credentials.
 
 ## Implemented runtime behavior
 
-`OpenAIAgentsRunner` uses the main deployment, medium reasoning, Responses, disabled
+`OpenAIAgentsRunner` uses the Luna main deployment, medium reasoning, Responses, disabled
 parallel tool calls, no response storage, and external tracing disabled. The application
 enforces an eight-turn, twenty-custom-tool, 4,096-output-token, and 180-second baseline.
 The custom-tool counter is application-owned rather than delegated to an API limit.
 
-Runner selection happens at worker startup:
+Runner selection happens only at agent-worker startup:
 
 - endpoint + key + main deployment selects Azure;
 - no endpoint and no key selects the deterministic fake;
@@ -58,4 +58,9 @@ The runtime selects the replica backend only when
 unavailable and the model must abstain. Synthetic observations are confined to
 `cerebro.evals` and are never selected by the Slack worker. Even with replica data, the
 application accepts a recommended customer only when `verify_payment_candidate` returned
-that exact order/receivable pair in the same run.
+that exact order/receivable pair in the same run. The model cites opaque evidence IDs;
+application code validates those IDs and owns confidence, ranking, CRM URLs, and prose.
+
+Before starting Slice 5, confirm the Azure resource actually contains the deployment named
+by `CEREBRO_AZURE_DEPLOYMENT_MAIN` and that it serves GPT-5.6 Luna. A deployment-not-found
+response is configuration failure, not permission to fall back silently to Sol.

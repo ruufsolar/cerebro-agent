@@ -17,4 +17,4 @@ ENV PATH="/app/api/.venv/bin:$PATH" \
     CEREBRO_KNOWLEDGE_DIR=/app/knowledge
 USER cerebro
 EXPOSE 8000
-CMD ["uvicorn", "cerebro.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["python", "-m", "cerebro.web"]

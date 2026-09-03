@@ -16,3 +16,13 @@ build/
 *.dump
 *.sqlite*
 tmp/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+backend.hcl
+terraform.tfvars
+terraform.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+crash.log

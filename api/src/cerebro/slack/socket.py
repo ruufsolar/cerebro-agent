@@ -7,10 +7,11 @@ from slack_bolt.app.async_app import AsyncApp
 
 from cerebro.config import get_config
 from cerebro.jobs.app import app as job_app
+from cerebro.observability import configure_logging, log_event
+from cerebro.ops.runtime import RuntimeComponent, maintain_heartbeat
 from cerebro.slack.events import normalize_event
 from cerebro.slack.service import receive_event
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger(__name__)
 
 
@@ -24,8 +25,14 @@ async def _receive(body: dict[str, Any], context: Any, ack: Any) -> None:
             config=get_config(),
         )
         await receive_event(normalized)
-    except Exception:
-        logger.exception("failed after acknowledging Slack event")
+        log_event(logger, "slack_event_accepted", slack_event_type=normalized.event_type)
+    except Exception as exc:
+        log_event(
+            logger,
+            "slack_event_receive_failed",
+            level=logging.ERROR,
+            error_type=type(exc).__name__,
+        )
 
 
 def build_slack_app() -> AsyncApp:
@@ -47,8 +54,9 @@ def build_slack_app() -> AsyncApp:
 
 async def main() -> None:
     config = get_config()
+    configure_logging("slack", config)
     handler = AsyncSocketModeHandler(build_slack_app(), config.slack_app_token)
-    async with job_app.open_async():
+    async with job_app.open_async(), maintain_heartbeat(RuntimeComponent.SLACK, config):
         await handler.start_async()
 
 

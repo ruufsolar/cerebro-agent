@@ -1,37 +1,36 @@
 # Response contract
 
-The agent produces structured data first and the Slack surface renders Spanish prose. This
-prevents prompt wording from becoming an accidental API.
+Cerebro produces structured data first. The application validates evidence, computes
+confidence, builds CRM links, and renders concise Spanish prose.
 
-## Fields
+## Outcomes
 
-- `recommended_customer`: name, `orderId`, CRM URL, and reason; nullable.
-- `account_receivable_summary`: a one-line business description, nullable.
-- `confidence`: `high`, `medium`, `low`, or `unknown`.
-- `investigation_summary`: synthesized supporting and contradictory evidence.
-- `unable_to_verify`: explicit missing checks.
-- `alternatives`: zero to three ranked plausible candidates.
+- `matched`: exactly one verified customer/receivable with high or medium confidence.
+- `ambiguous`: no recommendation; up to three verified ranked alternatives may be useful.
+- `no_customer_found`: a conclusive available search found no eligible customer. This does
+  not classify the movement as supplier, refund, or internal transfer.
+- `out_of_scope`: the request is not incoming-payment identification.
 
-## Confidence rubric
+Technical exhaustion becomes `ambiguous` plus a completion reason. Provider/configuration
+failures remain failed runs.
 
-- **High:** a strong signal is independently consistent (for example, installation address
-  in glosa plus matching open AR/customer) and there is no material contradiction.
-- **Medium:** multiple weaker signals agree, or one strong signal has a small unresolved
-  issue.
-- **Low:** a tentative candidate is useful for manual review but important signals are
-  missing or contradictory.
-- **Unknown:** no defensible candidate. This is a successful outcome, not a model failure.
+## Grounding
 
-Do not expose numeric probabilities until they are calibrated against labeled FinOps data.
+Tools return opaque evidence IDs with source, kind, polarity, strength, and candidate
+ownership. The model may select only IDs observed in the current run. Application code
+rejects missing, cross-candidate, unverified, contradicted, or non-unique recommendations.
+It owns the customer name, account-receivable summary, CRM URL, confidence, and prose.
 
-## Example
+High requires an exact normalized installation address without material contradiction.
+Verified identity supports medium. Amount alone never produces a match. Weak/conflicting
+signals preserve uncertainty.
 
-> **Cliente recomendado:** Ana Pérez — [abrir en CRM FinOps](.../ORD-123)  
-> **Cuenta por cobrar:** saldo final de instalación residencial en Providencia  
-> **Confianza:** alta  
-> La glosa contiene la dirección de instalación registrada para Ana y el monto coincide con
-> el saldo pendiente después de sus abonos. No pude verificar un comprobante histórico en
-> Vambe porque los adjuntos no están disponibles en la réplica.
+## Slack form
 
-When no candidate is found, say so directly and list the most important checks performed.
-Do not pad the answer with weak candidates.
+- Matched: at most six lines and about 110 words.
+- Ambiguous/no customer: at most four lines and 75 words.
+- Out of scope: at most two lines and 40 words.
+- Up to three alternatives may raise the absolute limit to 130 words.
+
+Empty sections, repeated evidence, raw identifiers, and tool-by-tool narration are omitted.
+Partial image failures are folded into the missing-verification line.

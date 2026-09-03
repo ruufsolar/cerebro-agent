@@ -1,8 +1,8 @@
 # External setup checklist
 
 Complete these independently from Phase 0. Never paste secrets into Slack, tickets, this
-wiki, commits, or AI chats. Store them in the approved secret manager and `/etc/cerebro-agent/env`
-on the VM with mode `0600` until a managed secret injection path replaces it.
+wiki, commits, or AI chats. The Azure production path stores them in a dedicated Key Vault;
+the private VM retrieves them with managed identity and renders root-only runtime files.
 
 ## 1. Slack app
 
@@ -79,33 +79,28 @@ The local synthetic database is intentionally not a physical replica and therefo
 This access is required to activate Slice 3 against real data, but not for the fake Slack
 shell or the synthetic fixture profile.
 
-## 4. PostHog
-
-1. Create a separate project named `cerebro-agent`.
-2. Gather `CEREBRO_POSTHOG_API_KEY` and `CEREBRO_POSTHOG_HOST`.
-3. Give only maintainers access and define a low-volume/cost alert if supported.
-4. Validate that the event allowlist in `integrations/posthog.md` contains no customer data.
-
-No personal API key is needed by the running service. Do not enable Agents SDK external
-tracing.
-
-## 5. GitHub/GHCR and VM
+## 4. GitHub/GHCR and Azure runtime
 
 1. Confirm GitHub Actions can write `ghcr.io/ruufsolar/cerebro-agent` using its repository
    `GITHUB_TOKEN`; make the package readable by the deployment user/repository as intended.
-2. On the Wattson baseline VM, reserve `/etc/cerebro-agent`, `/var/backups/cerebro-agent`,
-   localhost port `8010`, and Cerebro's own PostgreSQL volume/password.
-3. Authenticate Docker to GHCR using a minimally scoped `read:packages` token or approved
-   machine identity.
-4. Run `deploy/bootstrap.sh` from a reviewed checkout, fill the two protected env files,
-   deploy, and verify `curl http://127.0.0.1:8010/health`.
-5. Socket Mode needs outbound HTTPS/WebSocket access to Slack and HTTPS to Azure/PostHog,
+2. Review and apply the [Azure Terraform stack](../../infra/terraform/README.md). It creates
+   a dedicated VM rather than placing Cerebro on Wattson's host.
+3. Give the Terraform `outbound_public_ip` to the replica owner for allowlisting. No VM
+   public IP or inbound application port is created.
+4. Seed the dedicated Key Vault with a minimally scoped GHCR `read:packages` machine token
+   and the approved runtime values, then activate through Azure Run Command.
+5. Confirm pilot readiness and preflight while mode is `off`; switch explicitly to `review`
+   only when the test channel and operator are ready.
+6. Socket Mode needs outbound HTTPS/WebSocket access to Slack and HTTPS to Azure,
    plus network access from Cerebro only to the replica endpoint.
 
 ## Values to bring back to engineering
 
 Do not send the values themselves in chat. Confirm only that these secret-store entries
 exist: Slack app/bot tokens, Azure endpoint/key/deployment, Cerebro DB password, read-replica
-DSN, PostHog key/host, and GHCR deploy credential. Also provide non-secret workspace/app/bot/
+DSN, and GHCR deploy credential. Also provide non-secret workspace/app/bot/
 channel IDs, Azure deployment name, endpoint hostname, quota, replica schema version/source,
-and VM port/path.
+and Azure subscription/region, stable outbound IP, VM/resource-group names, and Key Vault
+name.
+
+PostHog and external Agents SDK tracing are deliberately absent from V0. See ADR-008.

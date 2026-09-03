@@ -17,6 +17,13 @@ from cerebro.agent.data_tools import (
     VambeQuery,
     VerifyCandidateQuery,
 )
+from cerebro.agent.models import (
+    EvidenceKind,
+    EvidencePolarity,
+    EvidenceSignal,
+    EvidenceSource,
+    EvidenceStrength,
+)
 from cerebro.replica.database import QueryResult, ReplicaDatabase
 from cerebro.replica.scope import KnowledgeBundle
 from cerebro.replica.sql_policy import SqlPolicyError, validate_readonly_sql
@@ -117,7 +124,8 @@ def _plain(value: str | None) -> str:
     if not value:
         return ""
     decomposed = normalize("NFKD", value.casefold())
-    return "".join(character for character in decomposed if not combining(character))
+    without_accents = "".join(character for character in decomposed if not combining(character))
+    return " ".join(re.findall(r"[a-z0-9]+", without_accents))
 
 
 def _glosa_name_tokens(value: str | None) -> list[str]:
@@ -135,10 +143,48 @@ def _glosa_name_tokens(value: str | None) -> list[str]:
         "solar",
         "transferencia",
     }
-    tokens = re.findall(r"[a-z0-9]+", _plain(value))
-    return list(
-        dict.fromkeys(token for token in tokens if len(token) >= 4 and token not in ignored)
-    )[:8]
+    tokens = list(
+        dict.fromkeys(
+            token for token in _plain(value).split() if len(token) >= 4 and token not in ignored
+        )
+    )
+    return sorted(tokens, key=lambda token: (-len(token), tokens.index(token)))[:6]
+
+
+def _partial_address_match(glosa: str, address: str) -> bool:
+    glosa_tokens = set(glosa.split())
+    address_tokens = address.split()
+    numeric = {token for token in address_tokens if token.isdigit()}
+    words = {token for token in address_tokens if not token.isdigit() and len(token) >= 3}
+    matched_words = words & glosa_tokens
+    return (
+        bool(numeric)
+        and numeric <= glosa_tokens
+        and len(matched_words) >= 2
+        and len(matched_words) / len(words) >= 0.7
+    )
+
+
+def _signal(
+    row: dict[str, object],
+    *,
+    verified: bool,
+    kind: EvidenceKind,
+    polarity: EvidencePolarity,
+    strength: EvidenceStrength,
+    description: str,
+) -> EvidenceSignal:
+    return EvidenceSignal(
+        kind=kind,
+        source=(
+            EvidenceSource.CANDIDATE_VERIFICATION if verified else EvidenceSource.PAYMENT_CANDIDATES
+        ),
+        polarity=polarity,
+        strength=strength,
+        description=description,
+        order_id=str(row["order_id"]),
+        account_receivable_id=str(row["account_receivable_id"]),
+    )
 
 
 def _digits(value: str | None) -> str:
@@ -155,8 +201,7 @@ def _candidate(
     *,
     verified: bool,
 ) -> InvestigationCandidate:
-    evidence: list[str] = []
-    contradictions: list[str] = []
+    evidence: list[EvidenceSignal] = []
     address = str(row.get("full_address") or "")
     customer_name = str(row["customer_name"])
     outstanding = _decimal(row["outstanding_amount"])
@@ -172,36 +217,128 @@ def _candidate(
         left, right = _plain(requested_address), _plain(address)
         name_tokens = set(_glosa_name_tokens(requested_address))
         customer_tokens = set(_glosa_name_tokens(customer_name))
-        if left in right or right in left:
-            evidence.append(f"La glosa coincide con la dirección {address}.")
+        if right and right in left:
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.EXACT_ADDRESS,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.STRONG,
+                    description="La glosa coincide con la dirección completa de instalación.",
+                )
+            )
+        elif right and _partial_address_match(left, right):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.PARTIAL_ADDRESS,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="La glosa coincide parcialmente con la dirección de instalación.",
+                )
+            )
         elif name_tokens & customer_tokens:
-            matched = ", ".join(sorted(name_tokens & customer_tokens))
-            evidence.append(f"La glosa contiene parte del nombre del cliente ({matched}).")
-        else:
-            contradictions.append(
-                "La glosa no coincide con la dirección ni con el nombre del cliente."
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.CUSTOMER_NAME,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="La glosa contiene parte distintiva del nombre del cliente.",
+                )
             )
     if transferor:
         normalized = _plain(transferor)
         if normalized in _plain(customer_name) or _plain(customer_name) in normalized:
-            evidence.append("El nombre del transferente coincide con el cliente.")
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.CUSTOMER_NAME,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="El nombre del transferente coincide con el cliente.",
+                )
+            )
         elif any(
             normalized in _plain(str(row.get(field) or ""))
             for field in ("legacy_bank_name", "normalized_bank_name")
         ):
             evidence.append(
-                "El nombre coincide con una cuenta bancaria almacenada; es evidencia de apoyo."
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.BANK_NAME,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.WEAK,
+                    description=("El nombre coincide con una cuenta bancaria almacenada de apoyo."),
+                )
             )
         else:
-            contradictions.append("El nombre del transferente no coincide con el cliente.")
-    if amount is not None:
-        if amount == outstanding and requested_currency == currency:
             evidence.append(
-                f"El monto coincide exactamente con el saldo {outstanding_text} {currency}."
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.IDENTITY_CONFLICT,
+                    polarity=EvidencePolarity.CONTRADICTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="El nombre del transferente no coincide con el cliente.",
+                )
+            )
+    if amount is not None:
+        if requested_currency != currency:
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.CURRENCY_MISMATCH,
+                    polarity=EvidencePolarity.CONTRADICTING,
+                    strength=EvidenceStrength.STRONG,
+                    description="La moneda del pago no coincide con la cuenta por cobrar.",
+                )
+            )
+        elif amount == outstanding:
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.EXACT_OUTSTANDING,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description=(
+                        f"El monto coincide exactamente con el saldo {outstanding_text} {currency}."
+                    ),
+                )
+            )
+        elif amount < outstanding:
+            remaining = format(outstanding - amount, "f")
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.PARTIAL_PAYMENT,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.WEAK,
+                    description=(
+                        f"El monto puede ser un abono parcial; quedarían {remaining} {currency}."
+                    ),
+                )
             )
         else:
-            contradictions.append(
-                f"El monto no coincide con el saldo pendiente {outstanding_text} {currency}."
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.AMOUNT_EXCEEDS_OUTSTANDING,
+                    polarity=EvidencePolarity.CONTRADICTING,
+                    strength=EvidenceStrength.STRONG,
+                    description=(
+                        f"El monto supera el saldo pendiente {outstanding_text} {currency}."
+                    ),
+                )
             )
     if isinstance(request, PaymentCandidateQuery):
         if request.transferor_rut:
@@ -211,14 +348,61 @@ def _candidate(
                 _digits(str(row.get("legacy_bank_rut") or "")),
                 _digits(str(row.get("normalized_bank_rut") or "")),
             }:
-                evidence.append("El RUT coincide con identidad almacenada.")
+                evidence.append(
+                    _signal(
+                        row,
+                        verified=verified,
+                        kind=EvidenceKind.RUT,
+                        polarity=EvidencePolarity.SUPPORTING,
+                        strength=EvidenceStrength.MEDIUM,
+                        description="El RUT coincide con la identidad almacenada.",
+                    )
+                )
         if request.origin_account_number:
             account = _digits(request.origin_account_number)
             if account and account in {
                 _digits(str(row.get("legacy_bank_account") or "")),
                 _digits(str(row.get("normalized_bank_account") or "")),
             }:
-                evidence.append("La cuenta de origen coincide con una cuenta almacenada de apoyo.")
+                evidence.append(
+                    _signal(
+                        row,
+                        verified=verified,
+                        kind=EvidenceKind.BANK_ACCOUNT,
+                        polarity=EvidencePolarity.SUPPORTING,
+                        strength=EvidenceStrength.WEAK,
+                        description=(
+                            "La cuenta de origen coincide con una cuenta almacenada de apoyo."
+                        ),
+                    )
+                )
+        if (
+            request.email
+            and request.email.casefold() == str(row.get("customer_email") or "").casefold()
+        ):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.EMAIL,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="El correo coincide con el cliente.",
+                )
+            )
+        if request.phone and _digits(request.phone) == _digits(
+            str(row.get("customer_phone") or "")
+        ):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.PHONE,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="El teléfono coincide con el cliente.",
+                )
+            )
     installment = str(row.get("installment_summary") or "sin cuotas descritas")
     ar_type = str(row["account_receivable_type"])
     summary = f"{ar_type}; saldo pendiente {outstanding_text} {currency}; {installment}"
@@ -231,7 +415,6 @@ def _candidate(
         outstanding_amount=outstanding,
         currency=currency,
         evidence=evidence,
-        contradictions=contradictions,
         verified=verified,
     )
 
@@ -321,6 +504,15 @@ class ReplicaInvestigationData:
                         "EXISTS (SELECT 1 FROM UNNEST("
                         f"{token_parameter}::text[]) AS token(value) WHERE "
                         "immutable_unaccent(LOWER(customer_name)) LIKE '%' || "
+                        "immutable_unaccent(LOWER(token.value)) || '%')",
+                    )
+                )
+                matches.append(
+                    (
+                        "glosa_address_token_match",
+                        "EXISTS (SELECT 1 FROM UNNEST("
+                        f"{token_parameter}::text[]) AS token(value) WHERE "
+                        "immutable_unaccent(LOWER(full_address)) LIKE '%' || "
                         "immutable_unaccent(LOWER(token.value)) || '%')",
                     )
                 )
@@ -503,11 +695,27 @@ class ReplicaInvestigationData:
             *params,
             max_rows=limits.vambe_max_messages,
         )
+        evidence: list[EvidenceSignal] = []
+        if result.row_count and request.query and request.order_id:
+            evidence.append(
+                EvidenceSignal(
+                    kind=EvidenceKind.VAMBE_CONTEXT,
+                    source=EvidenceSource.VAMBE,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.WEAK,
+                    description=(
+                        "Vambe contiene mensajes del candidato que coinciden "
+                        "con la búsqueda de pago."
+                    ),
+                    order_id=str(request.order_id),
+                )
+            )
         return ToolObservation(
             source="vambe",
             available=True,
             summary=f"Se encontraron {result.row_count} mensajes acotados al candidato.",
             rows=list(result.rows),
+            evidence=evidence,
             limitations=["Los adjuntos históricos de Vambe no están disponibles."],
             audit=ToolAuditMetadata(row_count=result.row_count, truncated=result.truncated),
         )

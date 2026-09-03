@@ -1,0 +1,6 @@
+resource_group_name  = "rg-cerebro-tfstate"
+storage_account_name = "replacewithgloballyuniquename"
+container_name       = "tfstate"
+key                  = "cerebro-prod.tfstate"
+use_azuread_auth     = true
+use_cli              = true

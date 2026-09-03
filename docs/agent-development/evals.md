@@ -41,20 +41,36 @@ FinOps feedback creates candidates for new labeled cases; it does not directly t
 rewrite Cerebro. Keep a small release-blocking suite and a larger diagnostic suite. Compare
 prompt/model/tool versions on the same cases before promotion.
 
-## Synthetic model harness
+## Slice 5 release suite
 
-`src/cerebro/evals/cases.yaml` contains six Slice 4 versioned, synthetic cases for address, name,
-amount ambiguity, difficult first payment, contradictory evidence, and prompt injection.
+`src/cerebro/evals/cases.yaml` contains exactly twenty anonymized cases across address/name,
+70/30 balances, partial payments, duplicate amounts, third-party/Vambe evidence,
+contradictions, eligibility, currency, no-customer, out-of-scope, injection, and unavailable
+sources. Fixtures respond to the requested order and amount rather than exposing arbitrary
+synthetic customers.
 
 ```bash
 cd api
 uv run python -m cerebro.evals.run        # schema/corpus validation only
 uv run python -m cerebro.evals.run --live # Azure + synthetic fixture tools
+uv run python -m cerebro.evals.run --live --json-output /tmp/cerebro-eval.json
+uv run python -m cerebro.evals.run --live --case third_party_with_vambe
 ```
 
-The live command also generates a fake PNG bank screenshot and runs one vision case with
-fixture-only customer tools. It requires approved Azure credentials but never connects to
-Slack or real Ruuf data. It is opt-in and not part of CI.
+The live command runs each case once with the configured Luna deployment. Screenshot cases
+generate temporary fake bank images. It requires approved Azure credentials but never
+connects to Slack, the replica, or real customer data. Passing requires at least 17/20
+correct decisions, zero wrong high-confidence matches, zero unsupported evidence/customer
+claims, and all response-length budgets. The JSON report also records per-case deployment,
+duration, and token use plus aggregate latency/usage; those measurements do not change the
+Slice 5 quality gate. It remains opt-in and outside CI.
+Repeat `--case` to rerun selected named cases while tuning; a filtered diagnostic requires
+every selected case to pass and does not replace the full 20-case gate.
 
 The separate `replica` Compose profile creates a schema-compatible PostgreSQL fixture and
 the integration test exercises the real deterministic tools. It does not call Azure or Slack.
+
+After the synthetic gate, run the ten-case FinOps pilot documented in
+`docs/operations/slice5-pilot.md`. Slice 6A evaluates its aggregate metadata with
+`python -m cerebro.ops.pilot_gate`; reactions inform fixture changes but never train or
+modify the agent directly.

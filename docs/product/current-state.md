@@ -1,8 +1,8 @@
 # Current state
 
-Last updated: 2026-09-01.
+Last updated: 2026-09-03.
 
-## Completed: Phase 0 through Slice 4 screenshot vision
+## Completed in code: Phase 0 through Slice 6A pilot hardening
 
 - Independent Python 3.13/`uv` project.
 - FastAPI health endpoint.
@@ -62,24 +62,57 @@ Last updated: 2026-09-01.
 - Base64 data-URL multimodal model input at `detail: high`; no OpenAI Files uploads, image
   persistence, external traces, historical-image replay, or image content in audits.
 - Explicit partial-image fallback counts and a synthetic opt-in Azure vision evaluation.
+- Azure main-deployment default changed to the deployment serving GPT-5.6 Luna; Responses,
+  medium reasoning, vision, structured output, and existing runtime budgets remain unchanged.
+- Four explicit outcomes: matched, ambiguous, no customer found, and out of scope.
+- Opaque evidence IDs and a per-run evidence ledger. The model selects evidence, while
+  application code validates the customer, evidence ownership, confidence, contradictions,
+  ranking, CRM URL, account-receivable summary, and final Spanish prose.
+- Normalized address matching, bounded noisy-glosa token discovery, and correct partial-payment
+  semantics. Smaller same-currency amounts are not contradictions; overpayments and currency
+  mismatches are.
+- Concise outcome-specific Slack rendering with deterministic line and word budgets.
+- A 20-case anonymized Slice 5 corpus with outcome, evidence, tool, safety, and verbosity graders
+  plus an optional JSON gate report.
+- Separate two-concurrency `control` and `agent` Procrastinate workers so long Azure runs do
+  not block Slack ingestion, feedback, delivery, or recovery.
+- Foundation/pilot readiness profiles with additive Slack/control/agent runtime heartbeats.
+- Privacy-safe structured JSON/text logs that discard arbitrary messages, exception content,
+  Slack payloads, customer data, SQL, screenshots, and private URLs.
+- Local preflight, aggregate status, and anonymized ten-case pilot-gate commands.
+- Five-minute aggregate watchdog warnings, 240-second drain/graceful-stop behavior, and a
+  deployment readiness gate that preserves the `last-good` rollback path.
+- Hard ten-case pilot gates for quality, screenshots, feedback, grounding, response length,
+  end-to-end latency, and model-token usage.
+- No PostHog dependency or external operational telemetry in V0. Agents SDK tracing remains
+  disabled; ADR-008 records the local-only telemetry decision.
+- A senior-reviewable Terraform production stack provisions a dedicated private Azure VM,
+  explicit stable NAT egress, retained data disk, Key Vault/managed-identity secret delivery,
+  and remote Entra-authenticated state. It has not been applied by this repository change;
+  capability remains preview and production mode defaults to `off`.
 
-## Not connected
+## Deliberately not connected
 
-- PostHog emission and launch dashboards.
+- PostHog, external dashboards, and external alert sinks in V0.
 - Any automatic bank trigger.
 - Any monolith write API.
 
-## Next slice
+## Slice 5 acceptance status
 
-Slice 5 validates the complete Slack → screenshot/text → Azure → replica/Vambe → response
-path with a controlled FinOps pilot and expands the release-blocking identification corpus.
-Azure Responses, production replica preflight, and the synthetic replica path are validated;
-real screenshot acceptance and FinOps sign-off remain rollout work.
+- Live synthetic Luna gate: **passed 20/20 on 2026-09-02** with
+  `payment-identification-slice5-v1`, `payment-identification-knowledge-v3`, and deployment
+  `gpt-5-6-luna`; zero wrong high-confidence matches and zero unsupported claims.
+- Pending: complete the ten-case controlled FinOps Slack pilot and obtain explicit FinOps
+  signoff.
+
+Until the Slack pilot passes, payment identification remains preview. Slice 6A's hardening
+is implemented; running the real ten cases, recording aggregate results, completing the
+rollback drill, and obtaining FinOps signoff remain manual release gates.
 
 ## Known facts from the reference systems
 
 - Wattson establishes the current baseline: Python 3.13, FastAPI, PostgreSQL/Alembic,
-  Procrastinate, OpenAI Agents SDK on Azure, PostHog, GHCR, and Docker Compose on the VM.
+  Procrastinate, OpenAI Agents SDK on Azure, GHCR, and Docker Compose on the VM.
 - Melocotón proves the Slack Socket Mode/thread/reaction and temporary-image patterns and
   uses read-only SQL with a database read-only transaction, 15-second timeout, and 200-row
   ceiling.

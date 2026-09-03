@@ -39,11 +39,13 @@ the planning system.
 - [Slack](integrations/slack.md)
 - [Azure OpenAI](integrations/azure-openai.md)
 - [Monolith and replica](integrations/monolith.md)
-- [PostHog](integrations/posthog.md)
 - [Future bank ingestion](integrations/bank-ingestion.md)
 - [Secrets](operations/secrets.md)
 - [Deployment](operations/deployment.md)
+- [Azure Terraform deployment](../infra/terraform/README.md)
 - [Runbook](operations/runbook.md)
+- [Pilot operations](operations/pilot-operations.md)
+- [Slice 5 controlled pilot](operations/slice5-pilot.md)
 
 ## Decisions
 
@@ -53,7 +55,8 @@ the planning system.
 - [ADR-004: OpenAI Agents SDK](adr/004-openai-agents-sdk.md)
 - [ADR-005: Approval-gated writes](adr/005-approval-gated-writes.md)
 - [ADR-006: Durable state and jobs](adr/006-durable-state-and-jobs.md)
-- [ADR-007: Observability and tracing](adr/007-observability-and-tracing.md)
+- [ADR-008: V0 local operational telemetry](adr/008-v0-local-operational-telemetry.md)
+- [ADR-009: Dedicated Azure VM with Terraform](adr/009-dedicated-azure-vm-with-terraform.md)
 
 When code and documentation disagree, treat that as a bug. Update `current-state.md` and
 the capability matrix in the same PR that changes behavior.

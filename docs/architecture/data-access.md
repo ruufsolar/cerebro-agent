@@ -42,13 +42,19 @@ grouping the complete history. Read-only serialization/recovery conflicts are re
 fresh transactions with short backoff; after that, the tool returns an explicit temporary-source
 limitation so Cerebro can abstain instead of failing the complete Slack run.
 
-Glosa matching checks the complete address first and can also use meaningful glosa tokens as
-customer-name evidence. Common payment/installment words are discarded. A name token is supporting
-evidence, not an exact-address match, and amount matching remains based on outstanding balance.
+Glosa matching normalizes case, accents, punctuation, and whitespace. A complete normalized
+address is strongest. Partial address evidence requires every numeric token and 70% of address
+words; bounded discovery uses at most six meaningful glosa tokens. Name tokens remain identity
+evidence, not exact-address evidence.
+
+Exact same-currency outstanding balance is supporting evidence. A smaller amount is a possible
+partial payment and reports the remaining balance rather than becoming a contradiction. An
+overpayment or currency mismatch contradicts the candidate; Cerebro performs no FX conversion.
+Amount-only searches do not scan every larger balance and cannot conclusively prove no customer.
 
 The initial PII scope includes RUT, bank account, phone, email, and address because each can
 be material identification evidence. It remains internal to FinOps and must not be emitted
-to PostHog or logs. Slack answers should use the minimum evidence necessary.
+to external telemetry or logs. Slack answers should use the minimum evidence necessary.
 
 ## Implemented tools
 
@@ -70,7 +76,9 @@ a row limit and executes it inside a read-only transaction.
 
 Tool audit records accumulated before a fatal provider/runtime failure are carried with the
 failure and persisted idempotently. Tool exceptions never include raw exception text or PII in the
-model observation or audit row.
+model observation or audit row. Candidate/context observations receive opaque per-run evidence
+IDs with typed source, kind, polarity, and strength. Safe audits persist categories/counts rather
+than evidence content.
 
 ## Schema evolution
 

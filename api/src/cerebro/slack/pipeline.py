@@ -12,7 +12,13 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cerebro.agent.models import Confidence, PaymentIdentification, ToolAuditRecord
+from cerebro.agent.models import (
+    Confidence,
+    CustomerCandidate,
+    IdentificationOutcome,
+    PaymentIdentification,
+    ToolAuditRecord,
+)
 from cerebro.agent.runner import (
     AgentRunFailure,
     AgentRunInput,
@@ -32,6 +38,7 @@ from cerebro.db.enums import (
 from cerebro.db.models import AgentRun, Conversation, Message, SlackOutput, ToolCall
 from cerebro.db.session import open_session
 from cerebro.jobs.enqueue import enqueue_slack_output
+from cerebro.observability import log_event
 from cerebro.slack.gateway import get_slack_gateway
 from cerebro.slack.images import ImageBatch, ingest_trigger_images
 
@@ -73,7 +80,9 @@ def render_identification(
         Confidence.LOW: "baja",
         Confidence.UNKNOWN: "no sé",
     }[result.confidence]
-    if run_result.prompt_version and "slice4" in run_result.prompt_version:
+    if run_result.prompt_version and "slice5" in run_result.prompt_version:
+        banner = "🧪 *Slice 5 — piloto con datos reales e imágenes; sin escrituras.*"
+    elif run_result.prompt_version and "slice4" in run_result.prompt_version:
         banner = "🧪 *Slice 4 — datos reales y capturas; sin correo ni escrituras.*"
     elif run_result.prompt_version and "slice3" in run_result.prompt_version:
         banner = "🧪 *Slice 3 — vista previa con datos reales; sin imágenes, correo ni escrituras.*"
@@ -86,37 +95,83 @@ def render_identification(
         banner = (
             "🧪 *Respuesta de prueba — la investigación en datos reales aún no está habilitada.*"
         )
-    lines = [banner, f"*Confianza:* {confidence}"]
-    if image_ingestion and image_ingestion.requested:
-        if image_ingestion.unprocessed:
-            lines.append(
-                f"*Capturas:* procesé {image_ingestion.downloaded} de "
-                f"{image_ingestion.requested}; no pude procesar "
-                f"{image_ingestion.unprocessed}."
-            )
-        else:
-            lines.append(
-                f"*Capturas:* procesé {image_ingestion.downloaded} de {image_ingestion.requested}."
-            )
-    if result.recommended_customer:
-        candidate = result.recommended_customer
-        lines.append(f"*Cliente recomendado:* <{candidate.crm_url}|{candidate.customer_name}>")
-    else:
-        lines.append("*Cliente recomendado:* no encontré un cliente.")
-    if result.account_receivable_summary:
-        lines.append(f"*Cuenta por cobrar:* {result.account_receivable_summary}")
-    lines.append(f"*Investigación:* {result.investigation_summary}")
-    if result.unable_to_verify:
-        lines.append(f"*No pude verificar:* {', '.join(result.unable_to_verify)}")
-    if result.alternatives:
-        lines.append("*Alternativas:*")
-        lines.extend(
-            f"• <{candidate.crm_url}|{candidate.customer_name}> — {candidate.reason}"
-            for candidate in result.alternatives
+    if result.outcome is IdentificationOutcome.OUT_OF_SCOPE:
+        return "\n".join([banner, f"*Resultado:* {_clip_words(result.investigation_summary, 25)}"])
+
+    image_note = ""
+    if image_ingestion and image_ingestion.unprocessed:
+        image_note = (
+            f"{image_ingestion.unprocessed}/{image_ingestion.requested} capturas no procesadas"
         )
-    if result.confidence is Confidence.UNKNOWN:
-        lines.append("*Resultado:* no sé; FinOps debe revisar el pago manualmente.")
+    unable = list(result.unable_to_verify)
+    if image_note and image_note not in unable:
+        unable.append(image_note)
+    pending = ", ".join(_clip_words(item, 5) for item in unable[:3])
+
+    if result.outcome is IdentificationOutcome.MATCHED and result.recommended_customer:
+        candidate = result.recommended_customer
+        lines = [
+            banner,
+            f"*Resultado:* coincidencia — confianza {confidence}.",
+            f"*Cliente:* {_customer_link(candidate)}",
+        ]
+        if result.account_receivable_summary:
+            lines.append(f"*Cuenta:* {_clip_words(result.account_receivable_summary, 16)}")
+        lines.append(f"*Por qué:* {_clip_words(result.investigation_summary, 34)}")
+        tail: list[str] = []
+        if pending:
+            tail.append(f"*No pude verificar:* {pending}")
+        if result.alternatives:
+            tail.append(f"*Alternativas:* {_render_alternatives(result, max_reason_words=4)}")
+        if tail:
+            lines.append(" · ".join(tail))
+        return "\n".join(lines)
+
+    if result.outcome is IdentificationOutcome.NO_CUSTOMER_FOUND:
+        lines = [
+            banner,
+            "*Resultado:* no encontré un cliente.",
+            f"*Por qué:* {_clip_words(result.investigation_summary, 24)}",
+        ]
+        if pending:
+            lines.append(f"*No pude verificar:* {pending}")
+        return "\n".join(lines)
+
+    lines = [
+        banner,
+        "*Resultado:* no sé; FinOps debe revisar el pago.",
+        f"*Por qué:* {_clip_words(result.investigation_summary, 24)}",
+    ]
+    details: list[str] = []
+    if result.alternatives:
+        details.append(f"*Opciones:* {_render_alternatives(result, max_reason_words=4)}")
+    if pending:
+        details.append(f"*Falta:* {pending}")
+    if details:
+        lines.append(" · ".join(details))
     return "\n".join(lines)
+
+
+def _clip_words(value: str, limit: int) -> str:
+    words = value.split()
+    if len(words) <= limit:
+        return value.strip()
+    return " ".join(words[:limit]).rstrip(".,;:") + "…"
+
+
+def _render_alternatives(result: PaymentIdentification, *, max_reason_words: int) -> str:
+    return "; ".join(
+        (
+            _customer_link(candidate, max_name_words=5)
+            + (f" — {_clip_words(candidate.reason, max_reason_words)}" if candidate.reason else "")
+        )
+        for candidate in result.alternatives[:3]
+    )
+
+
+def _customer_link(candidate: CustomerCandidate, *, max_name_words: int = 8) -> str:
+    customer_name = _clip_words(candidate.customer_name, max_name_words)
+    return f"<{candidate.crm_url}|{customer_name}>"
 
 
 def _bounded_json(
@@ -158,8 +213,13 @@ def _attachments(metadata: list[dict[str, object]] | None) -> tuple[TranscriptAt
 async def _clear_status(channel: str, thread_ts: str) -> None:
     try:
         await get_slack_gateway().clear_status(channel, thread_ts)
-    except Exception:
-        logger.warning("could not clear Slack thread status", exc_info=True)
+    except Exception as exc:
+        log_event(
+            logger,
+            "slack_status_clear_failed",
+            level=logging.WARNING,
+            error_type=type(exc).__name__,
+        )
 
 
 def _attachment_summary(trigger: Message) -> tuple[int, int]:
@@ -202,7 +262,15 @@ async def _cancel_if_stale(run_id: UUID) -> bool:
         if conversation:
             conversation.state = ConversationState.RUNNING
         await session.commit()
-        return True
+
+    log_event(
+        logger,
+        "agent_run_cancelled",
+        agent_run_id=run_id,
+        conversation_id=run.conversation_id,
+        run_status=RunStatus.CANCELLED,
+    )
+    return True
 
 
 @asynccontextmanager
@@ -245,10 +313,7 @@ def _append_image_limitation(
 ) -> AgentRunResult:
     if image_ingestion.unprocessed == 0:
         return result
-    note = (
-        f"{image_ingestion.unprocessed} de {image_ingestion.requested} captura(s) "
-        "no se pudieron procesar"
-    )
+    note = f"{image_ingestion.unprocessed}/{image_ingestion.requested} capturas no procesadas"
     unable = list(result.identification.unable_to_verify)
     if note not in unable:
         unable.append(note)
@@ -342,6 +407,14 @@ async def execute_run(run_id: UUID) -> None:
         }
         await session.commit()
 
+    log_event(
+        logger,
+        "agent_run_started",
+        agent_run_id=run_id,
+        conversation_id=conversation.id,
+        run_status=RunStatus.RUNNING,
+    )
+
     posts_to_slack = config.global_mode in {GlobalMode.REVIEW, GlobalMode.APPLY}
     runner = get_agent_runner()
     if posts_to_slack:
@@ -351,8 +424,14 @@ async def execute_run(run_id: UUID) -> None:
                 thread_ts,
                 "Investigando el pago…",
             )
-        except Exception:
-            logger.warning("could not set Slack thread status", exc_info=True)
+        except Exception as exc:
+            log_event(
+                logger,
+                "slack_status_set_failed",
+                level=logging.WARNING,
+                agent_run_id=run_id,
+                error_type=type(exc).__name__,
+            )
 
     started = monotonic()
     try:
@@ -401,7 +480,7 @@ async def execute_run(run_id: UUID) -> None:
                         ),
                         unable_to_verify=["cliente", "cuenta por cobrar", "evidencia del pago"],
                     ),
-                    prompt_version="payment-identification-slice4-v1",
+                    prompt_version="payment-identification-slice5-v1",
                 )
             result = _append_image_limitation(result, image_batch.ingestion)
         body = render_identification(result, image_batch.ingestion)
@@ -467,10 +546,37 @@ async def execute_run(run_id: UUID) -> None:
                 )
                 output_id = await session.scalar(statement)
             await session.commit()
+        log_event(
+            logger,
+            "agent_run_completed",
+            agent_run_id=run_id,
+            conversation_id=conversation.id,
+            run_status=RunStatus.SUCCEEDED,
+            outcome=result.identification.outcome,
+            confidence=result.identification.confidence,
+            completion_reason=result.completion_reason,
+            model=result.usage.model,
+            prompt_version=result.prompt_version,
+            knowledge_version=result.knowledge_version,
+            duration_ms=int((monotonic() - started) * 1_000),
+            input_tokens=result.usage.input_tokens,
+            output_tokens=result.usage.output_tokens,
+            turns=result.usage.turns,
+            tool_calls=result.usage.tool_calls,
+            image_count=image_batch.ingestion.downloaded,
+        )
         if output_id:
             await enqueue_slack_output(output_id)
     except Exception as exc:
-        logger.exception("agent run %s failed", run_id)
+        log_event(
+            logger,
+            "agent_run_failed",
+            level=logging.ERROR,
+            agent_run_id=run_id,
+            run_status=RunStatus.FAILED,
+            error_type=type(exc).__name__,
+            error_code="runner_error",
+        )
         output_id = None
         async with open_session() as session:
             run = await session.get(AgentRun, run_id, with_for_update=True)
@@ -486,7 +592,7 @@ async def execute_run(run_id: UUID) -> None:
                     await _persist_tool_calls(session, run.id, exc.tool_calls)
                 run.status = RunStatus.FAILED
                 run.error_code = "runner_error"
-                run.error_detail = str(exc)[:2_000]
+                run.error_detail = type(exc).__name__
                 run.finished_at = datetime.now(UTC)
                 conversation = await session.get(Conversation, run.conversation_id)
                 if conversation:
@@ -534,12 +640,18 @@ async def deliver_output(output_id: UUID) -> None:
     try:
         message_ts = await get_slack_gateway().post_message(channel, thread_ts, body, client_msg_id)
     except Exception as exc:
-        logger.warning("Slack output %s delivery failed", output_id, exc_info=True)
+        log_event(
+            logger,
+            "slack_output_delivery_failed",
+            level=logging.WARNING,
+            output_id=output_id,
+            error_type=type(exc).__name__,
+        )
         permanently_failed = False
         async with open_session() as session:
             output = await session.get(SlackOutput, output_id, with_for_update=True)
             if output:
-                output.last_error = str(exc)[:2_000]
+                output.last_error = type(exc).__name__
                 if output.attempts >= config.slack_delivery_max_attempts:
                     output.status = DeliveryStatus.FAILED
                     permanently_failed = True
@@ -575,3 +687,9 @@ async def deliver_output(output_id: UUID) -> None:
         )
         await session.execute(statement)
         await session.commit()
+    log_event(
+        logger,
+        "slack_output_sent",
+        output_id=output_id,
+        delivery_status=DeliveryStatus.SENT,
+    )

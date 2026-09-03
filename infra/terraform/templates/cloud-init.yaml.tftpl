@@ -1,0 +1,86 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - curl
+  - docker-compose-v2
+  - docker.io
+  - e2fsprogs
+  - jq
+
+write_files:
+  - path: /etc/cerebro-agent/azure.env
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: ${azure_env_b64}
+  - path: /etc/docker/daemon.json
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${docker_daemon_b64}
+  - path: /opt/cerebro-agent/deploy/bootstrap.sh
+    owner: root:root
+    permissions: '0755'
+    encoding: b64
+    content: ${bootstrap_script_b64}
+  - path: /opt/cerebro-agent/deploy/cerebro-agent-update.sh
+    owner: root:root
+    permissions: '0755'
+    encoding: b64
+    content: ${update_script_b64}
+  - path: /opt/cerebro-agent/deploy/cerebro-agent-backup.sh
+    owner: root:root
+    permissions: '0755'
+    encoding: b64
+    content: ${backup_script_b64}
+  - path: /opt/cerebro-agent/deploy/compose.yml
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${compose_b64}
+  - path: /opt/cerebro-agent/deploy/env.example
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: ${runtime_env_b64}
+  - path: /opt/cerebro-agent/deploy/compose.env.example
+    owner: root:root
+    permissions: '0600'
+    encoding: b64
+    content: ${compose_env_b64}
+  - path: /opt/cerebro-agent/deploy/systemd/cerebro-agent-update.service
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${update_service_b64}
+  - path: /opt/cerebro-agent/deploy/systemd/cerebro-agent-update.timer
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${update_timer_b64}
+  - path: /opt/cerebro-agent/deploy/systemd/cerebro-agent-backup.service
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${backup_service_b64}
+  - path: /opt/cerebro-agent/deploy/systemd/cerebro-agent-backup.timer
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${backup_timer_b64}
+  - path: /usr/local/sbin/cerebro-vm-bootstrap.sh
+    owner: root:root
+    permissions: '0750'
+    encoding: b64
+    content: ${vm_bootstrap_b64}
+  - path: /etc/systemd/system/cerebro-agent-bootstrap.service
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${bootstrap_service_b64}
+
+runcmd:
+  - [systemctl, daemon-reload]
+  - [systemctl, enable, cerebro-agent-bootstrap.service]
+  - [systemctl, start, --no-block, cerebro-agent-bootstrap.service]

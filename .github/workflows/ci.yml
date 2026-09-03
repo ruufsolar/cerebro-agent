@@ -54,9 +54,31 @@ jobs:
         run: |
           docker compose -f deploy/compose.local.yml up --build --wait
           curl -fsS http://127.0.0.1:8000/health
+          curl -fsS http://127.0.0.1:8000/ready
       - name: Show logs on failure
         if: failure()
         run: docker compose -f deploy/compose.local.yml logs --no-color
       - name: Stop local stack
         if: always()
         run: docker compose -f deploy/compose.local.yml down --volumes
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/terraform
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: 1.13.5
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh templates/vm-bootstrap.sh
+      - name: Lint deployment scripts
+        run: shellcheck scripts/*.sh templates/vm-bootstrap.sh ../../deploy/*.sh
+      - name: Check Terraform formatting
+        run: terraform fmt -check -recursive
+      - name: Initialize providers without Azure state
+        run: terraform init -backend=false -lockfile=readonly
+      - name: Validate Terraform
+        run: terraform validate

@@ -260,6 +260,55 @@ async def test_event_message_run_output_and_delivery_are_idempotent(
     assert gateway.posts[0][3] == str(output_id)
 
 
+async def test_twenty_five_mixed_deliveries_remain_idempotent(
+    clean_database: None,
+    memory_jobs: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del clean_database, memory_jobs
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "review")
+    get_config.cache_clear()
+    gateway = FakeSlackGateway()
+    set_slack_gateway(gateway)
+
+    event_ids = []
+    for index in range(25):
+        normalized = normalize_event(
+            message_envelope(f"Ev-load-{index}", ts=f"{100 + index}.1"),
+            bot_user_id="BOT",
+            config=get_config(),
+        )
+        event_id = await receive_event(normalized)
+        assert event_id is not None
+        assert await receive_event(normalized) is None
+        event_ids.append(event_id)
+
+    for event_id in event_ids:
+        await process_stored_event(event_id)
+    async with open_session() as session:
+        run_ids = list((await session.scalars(select(AgentRun.id))).all())
+    for run_id in run_ids:
+        await execute_run(run_id)
+    async with open_session() as session:
+        output_ids = list((await session.scalars(select(SlackOutput.id))).all())
+    for output_id in output_ids:
+        await deliver_output(output_id)
+        await deliver_output(output_id)
+
+    async with open_session() as session:
+        counts = {
+            model.__tablename__: await session.scalar(select(func.count()).select_from(model))
+            for model in (SlackEvent, Conversation, AgentRun, SlackOutput)
+        }
+    assert counts == {
+        "slack_event": 25,
+        "conversation": 25,
+        "agent_run": 25,
+        "slack_output": 25,
+    }
+    assert len(gateway.posts) == 25
+
+
 async def test_unknown_thread_followup_is_ignored(
     clean_database: None,
     memory_jobs: Any,
@@ -363,7 +412,8 @@ async def test_trigger_image_is_ephemeral_and_partial_rejection_is_explicit(
         "failure_categories": [],
     }
     assert run.steps[0]["type"] == "image_ingestion"
-    assert "procesé 1 de 2; no pude procesar 1" in output.body
+    assert "1/2 capturas no procesadas" in output.body
+    assert output.body.count("1/2 capturas no procesadas") == 1
     persisted = repr((run.input_snapshot, run.steps, event.payload))
     assert "must-not-persist.example" not in persisted
     assert "base64" not in persisted
