@@ -79,3 +79,14 @@ variable "tags" {
     service     = "cerebro-agent"
   }
 }
+
+variable "github_repository" {
+  description = "owner/name of the repository whose main branch may push images to the registry."
+  type        = string
+  default     = "ruufsolar/cerebro-agent"
+
+  validation {
+    condition     = can(regex("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$", var.github_repository))
+    error_message = "github_repository must look like owner/name."
+  }
+}

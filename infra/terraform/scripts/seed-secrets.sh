@@ -7,7 +7,7 @@ usage() {
 Usage: seed-secrets.sh --vault-name NAME --env-file PATH [--mode MODE] [--image-tag TAG]
 
 Reads approved runtime values without sourcing the env file and uploads them to Key Vault.
-CEREBRO_GHCR_USERNAME and CEREBRO_GHCR_TOKEN must be exported in the current shell.
+The VM pulls images with its managed identity, so no registry credential is seeded.
 Production mode defaults to "off" and must be changed explicitly.
 EOF
 }
@@ -74,8 +74,6 @@ AZURE_OPENAI_ENDPOINT=$(env_value CEREBRO_AZURE_OPENAI_ENDPOINT)
 AZURE_OPENAI_API_KEY=$(env_value CEREBRO_AZURE_OPENAI_API_KEY)
 AZURE_DEPLOYMENT_MAIN=$(env_value CEREBRO_AZURE_DEPLOYMENT_MAIN)
 READ_REPLICA_URL=$(env_value CEREBRO_READ_REPLICA_URL)
-GHCR_USERNAME=${CEREBRO_GHCR_USERNAME:-}
-GHCR_TOKEN=${CEREBRO_GHCR_TOKEN:-}
 DB_PASSWORD=${CEREBRO_DB_PASSWORD:-$(openssl rand -hex 32)}
 
 require_value CEREBRO_SLACK_APP_TOKEN "$SLACK_APP_TOKEN"
@@ -84,8 +82,6 @@ require_value CEREBRO_AZURE_OPENAI_ENDPOINT "$AZURE_OPENAI_ENDPOINT"
 require_value CEREBRO_AZURE_OPENAI_API_KEY "$AZURE_OPENAI_API_KEY"
 require_value CEREBRO_AZURE_DEPLOYMENT_MAIN "$AZURE_DEPLOYMENT_MAIN"
 require_value CEREBRO_READ_REPLICA_URL "$READ_REPLICA_URL"
-require_value CEREBRO_GHCR_USERNAME "$GHCR_USERNAME"
-require_value CEREBRO_GHCR_TOKEN "$GHCR_TOKEN"
 [[ "$DB_PASSWORD" =~ ^[A-Za-z0-9]+$ ]] || {
   echo "CEREBRO_DB_PASSWORD must be alphanumeric so the internal DSN remains unambiguous" >&2
   exit 2
@@ -119,8 +115,6 @@ put_secret azure-openai-api-key "$AZURE_OPENAI_API_KEY"
 put_secret azure-deployment-main "$AZURE_DEPLOYMENT_MAIN"
 put_secret read-replica-url "$READ_REPLICA_URL"
 put_secret cerebro-db-password "$DB_PASSWORD"
-put_secret ghcr-username "$GHCR_USERNAME"
-put_secret ghcr-token "$GHCR_TOKEN"
 put_secret global-mode "$GLOBAL_MODE"
 put_secret image-tag "$IMAGE_TAG"
 

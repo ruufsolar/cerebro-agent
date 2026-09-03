@@ -17,7 +17,7 @@ Slack Socket Mode ──outbound──┐
 Azure OpenAI ───────outbound──┼── NAT Gateway / stable IP ── private Azure VM
 Read replica ───────outbound──┘                               ├─ web
                                                              ├─ control-worker
-GitHub Actions ──push── GHCR ──pull───────────────────────────├─ agent-worker
+GitHub Actions ──push── ACR ──pull────────────────────────────├─ agent-worker
                                                              ├─ slack
 Azure Key Vault ──managed identity───────────────────────────└─ PostgreSQL
                                                                     │
@@ -31,8 +31,11 @@ Azure Key Vault ──managed identity──────────────
   `terraform output -raw outbound_public_ip` to the replica owner for allowlisting.
 - The system-assigned VM identity can read only this deployment's Key Vault secrets.
 - An explicit operator receives `Key Vault Secrets Officer` at this vault only.
-- Slack, Azure OpenAI, replica, PostgreSQL, and GHCR credentials are seeded after
+- Slack, Azure OpenAI, replica, and PostgreSQL credentials are seeded after
   provisioning. They never enter Terraform variables, plans, or state.
+- Images live in this deployment's Azure Container Registry. The VM pulls with its
+  system-assigned identity and GitHub Actions pushes through a federated credential, so
+  no registry password exists in Key Vault, in GitHub, or on the VM.
 - Docker data, Cerebro PostgreSQL, and the 14-day local backup rotation live on a dedicated
   Standard SSD. Terraform protects that disk from accidental destroy.
 - The image update timer retains the last running image as `last-good`, serializes updates
@@ -47,7 +50,7 @@ Approve these choices before applying:
 2. `Standard_B2ms` and a 64-GiB Standard SSD as the initial pilot size.
 3. The stable NAT IP as an allowed source at the production read replica.
 4. The Entra object ID that may seed/rotate this vault's secrets.
-5. The GHCR machine user/token with `read:packages` only.
+5. Publishing images to this deployment's Azure Container Registry from `main`.
 6. Initial mode. Use `off` for provisioning, then explicitly seed `review` for the pilot.
 7. Acceptance of the pilot's availability boundary: one VM, one local PostgreSQL, and
    backups on the same managed disk. This is recoverable infrastructure, not HA/GA.
@@ -62,10 +65,11 @@ The person applying Terraform needs:
 - an Azure CLI login in the target tenant/subscription;
 - permission to create the resource group and its resources;
 - `Owner` or `User Access Administrator` plus `Contributor` at the target scope, because
-  Terraform creates two RBAC assignments;
+  Terraform creates four RBAC assignments (two on the Key Vault, two on the registry);
 - permission to create the separately managed Terraform-state resource group/storage;
 - Terraform 1.9+ and Azure CLI;
-- the reviewed repository checkout and an existing GHCR image.
+- the reviewed repository checkout, and write access to the GitHub repository so the CI
+  variables can be set after apply (the registry exists only once Terraform has run).
 
 Find the current user's Entra object ID with:
 
@@ -113,8 +117,8 @@ terraform apply cerebro-prod.tfplan
 
 Do not use `-auto-approve`. Review the plan for one VM, one retained managed disk, one NAT
 Gateway/public egress IP, no VM public IP or custom inbound rule, the dedicated network,
-Key Vault, and exactly two
-vault-scoped role assignments.
+Key Vault, the container registry, the CI identity with its federated credential, and exactly
+four role assignments: two scoped to the vault and two scoped to the registry.
 
 After apply:
 
@@ -126,23 +130,36 @@ terraform output -raw outbound_public_ip
 Have the replica owner allowlist that outbound IP before activation. The VM bootstrap
 service will retry safely while secrets or replica connectivity are unavailable.
 
-### 3. Seed secrets without Terraform
+### 3. Let CI publish images to the registry
+
+Terraform creates the registry, a CI identity, and a federated credential trusting this
+repository's `main` branch. Publish the non-secret identifiers as GitHub repository
+variables so `publish.yml` can authenticate without any stored secret:
+
+```bash
+terraform output -json github_actions_variables |
+  jq -r 'to_entries[] | "\(.key)=\(.value)"' |
+  while IFS='=' read -r name value; do
+    gh variable set "$name" --repo ruufsolar/cerebro-agent --body "$value"
+  done
+```
+
+Push to `main` (or rerun the workflow) and confirm the image lands in the registry before
+activating. Nothing is stored in GitHub secrets; a federated OIDC token is exchanged per run.
+
+### 4. Seed secrets without Terraform
 
 The seeder reads the existing approved Cerebro `.env` as plain data; it never sources it.
 It sends secret values via temporary mode-`0600` files so they do not appear in command
-arguments. Export a dedicated GHCR read credential in the current shell:
+arguments. No registry credential is seeded: the VM authenticates to the registry with
+its own managed identity.
 
 ```bash
-export CEREBRO_GHCR_USERNAME='approved-machine-user'
-read -r -s CEREBRO_GHCR_TOKEN
-export CEREBRO_GHCR_TOKEN
-
 ./scripts/seed-secrets.sh \
   --vault-name "$(terraform output -raw key_vault_name)" \
   --env-file ../../.env \
   --mode off \
   --image-tag main
-unset CEREBRO_GHCR_TOKEN
 ```
 
 The env file must contain the Slack app/bot tokens, Azure OpenAI endpoint/key/deployment,
@@ -157,13 +174,12 @@ The resulting vault contract is explicit and intentionally small:
 | `azure-openai-endpoint`, `azure-openai-api-key`, `azure-deployment-main` | approved Cerebro `.env` |
 | `read-replica-url` | approved Cerebro `.env` |
 | `cerebro-db-password` | generated, or explicit operator environment override |
-| `ghcr-username`, `ghcr-token` | explicit operator environment |
 | `global-mode`, `image-tag` | seeder flags |
 
 If a role assignment has not propagated, wait a few minutes and rerun the exact seeding
 command. Re-running creates new Key Vault secret versions and is safe.
 
-### 4. Activate and verify
+### 5. Activate and verify
 
 ```bash
 ./scripts/activate.sh
@@ -174,7 +190,7 @@ Activation uses Azure Run Command, not SSH. On the VM it:
 1. waits for and mounts the durable disk;
 2. retrieves secrets with the VM managed identity;
 3. writes root-only Compose environment files;
-4. logs into GHCR via standard input;
+4. authenticates to the registry with the VM managed identity;
 5. starts the Compose stack and timers;
 6. waits for pilot `/ready` to pass.
 
@@ -215,7 +231,7 @@ in a ticket.
 
 - **Rotate secrets:** rerun `seed-secrets.sh`, then `activate.sh`. Old Key Vault versions
   remain recoverable under vault policy, while only current values reach the VM.
-- **Deploy an image:** publish the reviewed SHA to GHCR, seed that immutable SHA as
+- **Deploy an image:** publish the reviewed SHA to the registry, seed that immutable SHA as
   `--image-tag`, and activate. The five-minute timer also follows the configured tag.
 - **Rollback:** seed `--image-tag last-good` only after confirming the local tag exists,
   activate, and confirm `/ready`; then restore a reviewed immutable SHA.

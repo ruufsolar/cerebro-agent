@@ -25,5 +25,5 @@ if [ "${CEREBRO_BOOTSTRAP_DEFER_TIMERS:-false}" != "true" ]; then
   systemctl enable --now cerebro-agent-update.timer cerebro-agent-backup.timer
 fi
 
-echo "Bootstrap complete. Fill /etc/cerebro-agent/env and compose.env, authenticate GHCR,"
+echo "Bootstrap complete. Fill /etc/cerebro-agent/env and compose.env, authenticate the registry,"
 echo "then run /usr/local/bin/cerebro-agent-update.sh and curl localhost:8010/ready."

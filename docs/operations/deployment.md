@@ -3,12 +3,12 @@
 The preferred production-environment path is the reviewed
 [Azure Terraform stack](../../infra/terraform/README.md). It creates a dedicated private VM,
 stable NAT egress, Key Vault identity boundary, and retained managed disk, then runs the
-existing GHCR + Docker Compose baseline. The scripts in this directory remain the runtime
+existing registry + Docker Compose baseline. The scripts in this directory remain the runtime
 deployment mechanism and can still be installed manually on an already approved VM.
 
 ## Topology
 
-- image: `ghcr.io/ruufsolar/cerebro-agent:{main|sha}`;
+- image: `<registry>.azurecr.io/cerebro-agent:{main|sha}`, pulled with the VM managed identity;
 - compose project/path: `cerebro-agent`, `/etc/cerebro-agent`;
 - services: `web`, `control-worker`, `agent-worker`, `slack`, `db`;
 - liveness/readiness: `127.0.0.1:8010/health`, `127.0.0.1:8010/ready`;
