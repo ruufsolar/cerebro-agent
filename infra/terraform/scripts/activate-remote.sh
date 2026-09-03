@@ -1,3 +1,4 @@
+#!/bin/sh
 # Executed on the VM through Azure Run Command by activate.sh and by the scheduled deploy
 # workflow. Run Command uses /bin/sh (dash on Ubuntu), so this must stay POSIX: no pipefail,
 # no bash arrays. Run Command reports success regardless of this script's exit status, so
