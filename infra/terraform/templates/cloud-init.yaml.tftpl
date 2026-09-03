@@ -69,6 +69,11 @@ write_files:
     permissions: '0644'
     encoding: b64
     content: ${backup_timer_b64}
+  - path: /usr/local/sbin/cerebro-registry-login.sh
+    owner: root:root
+    permissions: '0750'
+    encoding: b64
+    content: ${registry_login_b64}
   - path: /usr/local/sbin/cerebro-vm-bootstrap.sh
     owner: root:root
     permissions: '0750'

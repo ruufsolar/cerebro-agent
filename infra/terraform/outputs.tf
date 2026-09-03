@@ -23,6 +23,22 @@ output "private_ip" {
   value       = azurerm_network_interface.runtime.private_ip_address
 }
 
+output "registry_login_server" {
+  description = "Container registry the VM pulls from with its managed identity."
+  value       = azurerm_container_registry.cerebro.login_server
+}
+
+output "github_actions_variables" {
+  description = "Non-secret repository variables to set on the GitHub repo so CI can push images."
+  value = {
+    AZURE_CI_CLIENT_ID          = azurerm_user_assigned_identity.ci.client_id
+    AZURE_TENANT_ID             = data.azurerm_client_config.current.tenant_id
+    AZURE_SUBSCRIPTION_ID       = var.subscription_id
+    AZURE_REGISTRY_NAME         = azurerm_container_registry.cerebro.name
+    AZURE_REGISTRY_LOGIN_SERVER = azurerm_container_registry.cerebro.login_server
+  }
+}
+
 output "next_steps" {
   description = "Secret seeding and activation commands; run them from this directory."
   value = {

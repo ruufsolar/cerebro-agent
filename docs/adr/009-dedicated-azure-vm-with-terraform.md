@@ -43,3 +43,10 @@ rotation after readiness and replica allowlisting.
   and backups remain on the retained disk until off-disk backup is prioritized.
 - Container Apps, Kubernetes, and managed PostgreSQL remain future options if scale,
   availability, or business-write requirements justify their migration cost.
+
+## Amendment
+
+The image registry moved from GHCR to this deployment's Azure Container Registry. The VM
+pulls with its system-assigned managed identity and GitHub Actions pushes through a
+federated OIDC credential, which removes the long-lived registry token this ADR originally
+assumed would be stored in Key Vault. The runtime shape is otherwise unchanged.

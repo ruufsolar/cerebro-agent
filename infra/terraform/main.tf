@@ -3,7 +3,12 @@ locals {
   vm_name        = "${var.name_prefix}-vm"
 
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
-    azure_env_b64     = base64encode("CEREBRO_KEY_VAULT_NAME=${local.key_vault_name}\n")
+    azure_env_b64 = base64encode(join("", [
+      "CEREBRO_KEY_VAULT_NAME=${local.key_vault_name}\n",
+      "CEREBRO_AZURE_TENANT_ID=${data.azurerm_client_config.current.tenant_id}\n",
+      "CEREBRO_REGISTRY_LOGIN_SERVER=${azurerm_container_registry.cerebro.login_server}\n",
+      "CEREBRO_IMAGE_REPOSITORY=${azurerm_container_registry.cerebro.login_server}/cerebro-agent\n",
+    ]))
     backup_script_b64 = base64encode(file("${path.module}/../../deploy/cerebro-agent-backup.sh"))
     backup_service_b64 = base64encode(
       file("${path.module}/../../deploy/systemd/cerebro-agent-backup.service")
@@ -13,6 +18,7 @@ locals {
     )
     bootstrap_script_b64  = base64encode(file("${path.module}/../../deploy/bootstrap.sh"))
     bootstrap_service_b64 = base64encode(file("${path.module}/templates/cerebro-agent-bootstrap.service"))
+    registry_login_b64    = base64encode(file("${path.module}/templates/cerebro-registry-login.sh"))
     compose_b64           = base64encode(file("${path.module}/../../deploy/compose.yml"))
     compose_env_b64       = base64encode(file("${path.module}/../../deploy/compose.env.example"))
     docker_daemon_b64 = base64encode(jsonencode({
@@ -203,4 +209,49 @@ resource "azurerm_role_assignment" "secret_operator" {
   scope                = azurerm_key_vault.cerebro.id
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = var.secret_operator_object_id
+}
+
+# Container registry. The VM pulls with its own system-assigned identity and GitHub
+# Actions pushes through a federated credential, so no registry password exists anywhere:
+# not in Key Vault, not in GitHub secrets, and not in /root/.docker on the VM.
+resource "azurerm_container_registry" "cerebro" {
+  name                = "${replace(var.name_prefix, "-", "")}acr${random_string.suffix.result}"
+  location            = azurerm_resource_group.cerebro.location
+  resource_group_name = azurerm_resource_group.cerebro.name
+  sku                 = "Basic"
+  admin_enabled       = false
+  tags                = var.tags
+}
+
+resource "azurerm_role_assignment" "runtime_acr_pull" {
+  scope                = azurerm_container_registry.cerebro.id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_linux_virtual_machine.runtime.identity[0].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# A user-assigned identity rather than an Entra app registration: federated credentials
+# work the same way for CI, but this stays an ARM resource the subscription owner can
+# create without directory-level application permissions.
+resource "azurerm_user_assigned_identity" "ci" {
+  name                = "${var.name_prefix}-ci"
+  location            = azurerm_resource_group.cerebro.location
+  resource_group_name = azurerm_resource_group.cerebro.name
+  tags                = var.tags
+}
+
+resource "azurerm_federated_identity_credential" "ci_main" {
+  name                = "github-main"
+  resource_group_name = azurerm_resource_group.cerebro.name
+  parent_id           = azurerm_user_assigned_identity.ci.id
+  audience            = ["api://AzureADTokenExchange"]
+  issuer              = "https://token.actions.githubusercontent.com"
+  subject             = "repo:${var.github_repository}:ref:refs/heads/main"
+}
+
+resource "azurerm_role_assignment" "ci_acr_push" {
+  scope                = azurerm_container_registry.cerebro.id
+  role_definition_name = "AcrPush"
+  principal_id         = azurerm_user_assigned_identity.ci.principal_id
+  principal_type       = "ServicePrincipal"
 }

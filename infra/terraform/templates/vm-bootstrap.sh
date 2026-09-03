@@ -22,6 +22,7 @@ fail() {
 # shellcheck disable=SC1090
 source "$AZURE_ENV"
 [ -n "${CEREBRO_KEY_VAULT_NAME:-}" ] || fail "Key Vault name is missing"
+[ -n "${CEREBRO_IMAGE_REPOSITORY:-}" ] || fail "image repository is missing"
 
 log "waiting for the managed data disk"
 for _attempt in $(seq 1 120); do
@@ -71,12 +72,18 @@ vault_secret() {
   case "$value" in
     *$'\n'*|*$'\r'*) fail "Key Vault secret contains a forbidden newline: $name" ;;
   esac
+  if [[ "$value" == *"\\'"* || "$value" == *"\\" ]]; then
+    fail "Key Vault secret has no lossless env-file encoding: $name"
+  fi
   printf '%s' "$value"
 }
 
+# Compose reads a single-quoted env-file value literally and resolves only \' to a
+# quote, so escaping backslashes here would double them inside the container. Escape
+# quotes only; vault_secret rejects the two forms this cannot represent (a backslash
+# immediately before a quote, and a trailing backslash).
 dotenv_value() {
-  local escaped=${1//\\/\\\\}
-  escaped=${escaped//\'/\\\'}
+  local escaped=${1//\'/\\\'}
   printf "'%s'" "$escaped"
 }
 
@@ -91,8 +98,6 @@ AZURE_OPENAI_API_KEY=$(vault_secret azure-openai-api-key)
 AZURE_DEPLOYMENT_MAIN=$(vault_secret azure-deployment-main)
 READ_REPLICA_URL=$(vault_secret read-replica-url)
 DB_PASSWORD=$(vault_secret cerebro-db-password)
-GHCR_USERNAME=$(vault_secret ghcr-username)
-GHCR_TOKEN=$(vault_secret ghcr-token)
 GLOBAL_MODE=$(vault_secret global-mode)
 IMAGE_TAG=$(vault_secret image-tag)
 
@@ -153,6 +158,7 @@ mv "$runtime_tmp" "$RUNTIME_ENV"
 
 compose_tmp=$(mktemp /etc/cerebro-agent/compose.env.XXXXXX)
 {
+  printf 'CEREBRO_IMAGE_REPOSITORY=%s\n' "$CEREBRO_IMAGE_REPOSITORY"
   printf 'IMAGE_TAG=%s\n' "$IMAGE_TAG"
   printf 'CEREBRO_DB_PASSWORD=%s\n' "$DB_PASSWORD"
   printf 'CEREBRO_WEB_MEM=512m\n'
@@ -165,7 +171,7 @@ chmod 0600 "$compose_tmp"
 mv "$compose_tmp" "$COMPOSE_ENV"
 
 new_hash=$(sha256sum "$RUNTIME_ENV" "$COMPOSE_ENV" | sha256sum | cut -d' ' -f1)
-printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin >/dev/null
+/usr/local/sbin/cerebro-registry-login.sh
 systemctl enable --now cerebro-agent-update.timer cerebro-agent-backup.timer >/dev/null
 
 if [ "$old_hash" != "$new_hash" ]; then

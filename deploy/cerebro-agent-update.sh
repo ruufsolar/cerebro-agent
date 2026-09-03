@@ -10,8 +10,16 @@ fi
 
 COMPOSE=(docker compose -f /etc/cerebro-agent/compose.yml --env-file /etc/cerebro-agent/compose.env)
 IMAGE_TAG=$(grep -E '^IMAGE_TAG=' /etc/cerebro-agent/compose.env | cut -d= -f2 || true)
-IMAGE="ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}"
-ROLLBACK_TAG="ghcr.io/ruufsolar/cerebro-agent:last-good"
+IMAGE_REPOSITORY=$(grep -E '^CEREBRO_IMAGE_REPOSITORY=' /etc/cerebro-agent/compose.env | cut -d= -f2 || true)
+IMAGE="${IMAGE_REPOSITORY:-cerebro-agent}:${IMAGE_TAG:-main}"
+ROLLBACK_TAG="${IMAGE_REPOSITORY:-cerebro-agent}:last-good"
+
+# ACR refresh tokens expire well inside this timer's lifetime, so re-authenticate on
+# every run rather than relying on the login performed during bootstrap.
+if [ -x /usr/local/sbin/cerebro-registry-login.sh ]; then
+  /usr/local/sbin/cerebro-registry-login.sh || \
+    echo "cerebro-agent: registry login failed; relying on local images" >&2
+fi
 DRAIN_TIMEOUT_S=240
 HEALTH_TIMEOUT_S=120
 FORCE_DEPLOY=${CEREBRO_FORCE_DEPLOY:-0}

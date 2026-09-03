@@ -105,7 +105,7 @@ then reconnect surfaces.
 
 ## Security incident
 
-Disable mode, revoke affected Slack/Azure/DB/GHCR credentials, preserve access-controlled
+Disable mode, revoke affected Slack/Azure/DB credentials, preserve access-controlled
 logs, identify potentially exposed customer data, and follow company incident process. A
 credential in Git requires history-aware remediation and rotation.
 

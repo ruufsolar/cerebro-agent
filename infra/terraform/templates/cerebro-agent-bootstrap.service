@@ -1,8 +1,10 @@
 [Unit]
 Description=Configure and activate Cerebro from Azure Key Vault
 After=docker.service network-online.target
-Requires=docker.service
-Wants=network-online.target
+# Wants=, not Requires=: this script stops docker.service to mount the data disk under
+# the configured data-root, and a Requires= dependency would propagate that stop back
+# and terminate this unit mid-bootstrap without triggering Restart=on-failure.
+Wants=docker.service network-online.target
 StartLimitIntervalSec=0
 
 [Service]

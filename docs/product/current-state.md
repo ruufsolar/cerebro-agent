@@ -13,7 +13,7 @@ Last updated: 2026-09-03.
 - Capability registry with future business writes visibly planned but disabled.
 - Safe default mode (`off`), disabled payment/hold switches, configurable turn/tool/image/SQL
   budgets, and disabled external tracing.
-- Container, Compose, GHCR CI/deploy, VM update/backup skeleton.
+- Container, Compose, registry CI/deploy, VM update/backup skeleton.
 - Additive Slack manifest events for private-channel thread messages and reaction feedback.
 - Product/engineering/operations wiki and configurable data-scope knowledge.
 - Async Slack Socket Mode process using the existing app.
@@ -112,7 +112,7 @@ rollback drill, and obtaining FinOps signoff remain manual release gates.
 ## Known facts from the reference systems
 
 - Wattson establishes the current baseline: Python 3.13, FastAPI, PostgreSQL/Alembic,
-  Procrastinate, OpenAI Agents SDK on Azure, GHCR, and Docker Compose on the VM.
+  Procrastinate, OpenAI Agents SDK on Azure, Azure Container Registry, and Docker Compose on the VM.
 - Melocotón proves the Slack Socket Mode/thread/reaction and temporary-image patterns and
   uses read-only SQL with a database read-only transaction, 15-second timeout, and 200-row
   ceiling.

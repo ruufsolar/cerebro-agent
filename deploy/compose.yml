@@ -1,6 +1,6 @@
 # Installed at /etc/cerebro-agent/compose.yml on the approved production VM.
 # /etc/cerebro-agent/env         -> container CEREBRO_* settings/secrets
-# /etc/cerebro-agent/compose.env -> interpolation only: DB password and image tag
+# /etc/cerebro-agent/compose.env -> interpolation only: registry, image tag, DB password
 
 name: cerebro-agent
 
@@ -14,7 +14,7 @@ x-logging: &capped-logs
 services:
   web:
     <<: *capped-logs
-    image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
+    image: ${CEREBRO_IMAGE_REPOSITORY:-cerebro-agent}:${IMAGE_TAG:-main}
     mem_limit: ${CEREBRO_WEB_MEM:-512m}
     command: >
       sh -c "cd /app/api && alembic upgrade head
@@ -35,7 +35,7 @@ services:
 
   control-worker:
     <<: *capped-logs
-    image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
+    image: ${CEREBRO_IMAGE_REPOSITORY:-cerebro-agent}:${IMAGE_TAG:-main}
     mem_limit: ${CEREBRO_CONTROL_WORKER_MEM:-512m}
     command: python -m cerebro.worker --role control
     env_file: ${CEREBRO_ENV_FILE:-/etc/cerebro-agent/env}
@@ -47,7 +47,7 @@ services:
 
   agent-worker:
     <<: *capped-logs
-    image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
+    image: ${CEREBRO_IMAGE_REPOSITORY:-cerebro-agent}:${IMAGE_TAG:-main}
     mem_limit: ${CEREBRO_AGENT_WORKER_MEM:-1536m}
     command: python -m cerebro.worker --role agent
     env_file: ${CEREBRO_ENV_FILE:-/etc/cerebro-agent/env}
@@ -59,7 +59,7 @@ services:
 
   slack:
     <<: *capped-logs
-    image: ghcr.io/ruufsolar/cerebro-agent:${IMAGE_TAG:-main}
+    image: ${CEREBRO_IMAGE_REPOSITORY:-cerebro-agent}:${IMAGE_TAG:-main}
     mem_limit: ${CEREBRO_SLACK_MEM:-384m}
     command: python -m cerebro.slack.socket
     env_file: ${CEREBRO_ENV_FILE:-/etc/cerebro-agent/env}

@@ -79,15 +79,16 @@ The local synthetic database is intentionally not a physical replica and therefo
 This access is required to activate Slice 3 against real data, but not for the fake Slack
 shell or the synthetic fixture profile.
 
-## 4. GitHub/GHCR and Azure runtime
+## 4. GitHub, container registry, and Azure runtime
 
-1. Confirm GitHub Actions can write `ghcr.io/ruufsolar/cerebro-agent` using its repository
-   `GITHUB_TOKEN`; make the package readable by the deployment user/repository as intended.
+1. Confirm GitHub Actions can push to this deployment's Azure Container Registry through the
+   Terraform-created federated credential and the published repository variables; no
+   registry secret is stored in GitHub.
 2. Review and apply the [Azure Terraform stack](../../infra/terraform/README.md). It creates
    a dedicated VM rather than placing Cerebro on Wattson's host.
 3. Give the Terraform `outbound_public_ip` to the replica owner for allowlisting. No VM
    public IP or inbound application port is created.
-4. Seed the dedicated Key Vault with a minimally scoped GHCR `read:packages` machine token
+4. No registry credential is seeded; the VM pulls with its system-assigned managed identity
    and the approved runtime values, then activate through Azure Run Command.
 5. Confirm pilot readiness and preflight while mode is `off`; switch explicitly to `review`
    only when the test channel and operator are ready.
@@ -98,7 +99,7 @@ shell or the synthetic fixture profile.
 
 Do not send the values themselves in chat. Confirm only that these secret-store entries
 exist: Slack app/bot tokens, Azure endpoint/key/deployment, Cerebro DB password, read-replica
-DSN, and GHCR deploy credential. Also provide non-secret workspace/app/bot/
+DSN. Also provide non-secret workspace/app/bot/
 channel IDs, Azure deployment name, endpoint hostname, quota, replica schema version/source,
 and Azure subscription/region, stable outbound IP, VM/resource-group names, and Key Vault
 name.
