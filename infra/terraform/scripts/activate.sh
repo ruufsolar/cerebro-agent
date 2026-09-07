@@ -9,6 +9,10 @@ TF_DIR=$(cd "$SCRIPT_DIR/.." && pwd)
 RESOURCE_GROUP=$(terraform -chdir="$TF_DIR" output -raw resource_group_name)
 VM_NAME=$(terraform -chdir="$TF_DIR" output -raw vm_name)
 
+# Put this checkout's deployment scripts on the VM first, so activation runs the reviewed
+# revision rather than whatever cloud-init installed when the VM was created.
+"$SCRIPT_DIR/sync-deploy-files.sh" --resource-group "$RESOURCE_GROUP" --name "$VM_NAME"
+
 # The remote payload is shared with .github/workflows/deploy.yml; see the comments there
 # about Run Command's shell and exit-status behaviour.
 result=$(az vm run-command invoke \

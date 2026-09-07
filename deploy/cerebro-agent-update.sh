@@ -33,11 +33,31 @@ if [ "$before" == "$after" ] && [ "$after" != "none" ] && [ "$FORCE_DEPLOY" != "
   exit 0
 fi
 
+# Count only in-flight jobs that a live worker is actually running. A job whose worker
+# died without finishing it (worker_id null, or a heartbeat older than the worker's own
+# stall timeout) is orphaned: nothing will ever complete it, so waiting on it would block
+# every deploy until someone fixed the row by hand. Workers heartbeat every 10s.
 running_jobs() {
-  "${COMPOSE[@]}" exec -T db psql -U cerebro -d cerebro -tA \
-    -c "SELECT count(*) FROM procrastinate_jobs WHERE status = 'doing'" 2>/dev/null \
+  "${COMPOSE[@]}" exec -T db psql -U cerebro -d cerebro -tA -c "
+    SELECT count(*) FROM procrastinate_jobs j
+      JOIN procrastinate_workers w ON w.id = j.worker_id
+     WHERE j.status = 'doing' AND w.last_heartbeat > now() - interval '60 seconds'" 2>/dev/null \
     | tr -d '[:space:]' || echo 0
 }
+
+orphaned_jobs() {
+  "${COMPOSE[@]}" exec -T db psql -U cerebro -d cerebro -tA -c "
+    SELECT count(*) FROM procrastinate_jobs j
+      LEFT JOIN procrastinate_workers w ON w.id = j.worker_id
+     WHERE j.status = 'doing'
+       AND (w.id IS NULL OR w.last_heartbeat <= now() - interval '60 seconds')" 2>/dev/null \
+    | tr -d '[:space:]' || echo 0
+}
+
+orphans=$(orphaned_jobs)
+if [ -n "$orphans" ] && [ "$orphans" != "0" ]; then
+  echo "cerebro-agent: ignoring $orphans orphaned job(s) left in 'doing' by a dead worker" >&2
+fi
 
 # Stop new Slack ingestion first. Existing control/agent workers stay alive while the
 # already-accepted work drains, so the update never deliberately cancels an investigation.

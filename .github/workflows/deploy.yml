@@ -40,9 +40,11 @@ jobs:
       VAULT_NAME: ${{ vars.AZURE_KEY_VAULT_NAME }}
       REGISTRY_NAME: ${{ vars.AZURE_REGISTRY_NAME }}
     steps:
+      # On a schedule this is main. On dispatch it is the ref chosen in the Actions UI, so a
+      # branch can be exercised end to end; images only exist for main commits, so the tag
+      # resolution below walks back to the newest ancestor that has one.
       - uses: actions/checkout@v7
         with:
-          ref: main
           fetch-depth: 30
 
       # Federated credential: the workflow proves its identity with a short-lived OIDC token.
@@ -101,6 +103,15 @@ jobs:
           az keyvault secret set --vault-name "$VAULT_NAME" --name image-tag --value "$TAG" \
             --only-show-errors --output none
           echo "Key Vault image-tag is now $TAG"
+
+      # cloud-init installs the deployment scripts only at VM creation; ship this
+      # revision's copies so activation runs reviewed code, not whatever the VM was born with.
+      - name: Sync deployment files to the VM
+        if: steps.point.outcome == 'success'
+        run: |
+          set -euo pipefail
+          infra/terraform/scripts/sync-deploy-files.sh \
+            --resource-group "$RESOURCE_GROUP" --name "$VM_NAME"
 
       - name: Activate on the VM
         id: activate

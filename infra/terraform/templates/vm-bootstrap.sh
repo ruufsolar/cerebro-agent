@@ -33,19 +33,39 @@ done
 DATA_DEVICE=$(readlink -f "$DATA_LINK")
 [ -b "$DATA_DEVICE" ] || fail "managed data disk is not a block device"
 
-systemctl stop docker.service docker.socket >/dev/null 2>&1 || true
-if ! blkid "$DATA_DEVICE" >/dev/null 2>&1; then
-  log "formatting the new managed data disk"
-  mkfs.ext4 -F "$DATA_DEVICE" >/dev/null
+# Keep the update timer from racing this activation: its run takes the same lock the
+# forced update below needs, and an activation that loses that race fails. Wait for a run
+# already in progress rather than killing it mid-drain. The timer is re-enabled below.
+systemctl stop cerebro-agent-update.timer >/dev/null 2>&1 || true
+for _attempt in $(seq 1 90); do
+  systemctl is-active --quiet cerebro-agent-update.service || break
+  sleep 5
+done
+
+# Stopping Docker to move its data-root is a first-boot operation. On a live VM it kills
+# every container, including PostgreSQL and any agent run in flight, before the drained
+# update below has had a chance to let that work finish; a job killed this way is left in
+# "doing" with no worker. Only touch Docker when the disk is not yet serving it.
+if mountpoint -q "$DATA_MOUNT" && systemctl is-active --quiet docker.service &&
+  [ "$(docker info --format '{{.DockerRootDir}}' 2>/dev/null)" = "$DATA_MOUNT/docker" ]; then
+  log "data disk already mounted and serving Docker; leaving the running stack alone"
+else
+  systemctl stop docker.service docker.socket >/dev/null 2>&1 || true
+  if ! blkid "$DATA_DEVICE" >/dev/null 2>&1; then
+    log "formatting the new managed data disk"
+    mkfs.ext4 -F "$DATA_DEVICE" >/dev/null
+  fi
+  DATA_UUID=$(blkid -s UUID -o value "$DATA_DEVICE")
+  [ -n "$DATA_UUID" ] || fail "managed data disk has no filesystem UUID"
+  mkdir -p "$DATA_MOUNT"
+  if ! grep -qF "UUID=$DATA_UUID $DATA_MOUNT " /etc/fstab; then
+    printf 'UUID=%s %s ext4 defaults,nofail 0 2\n' "$DATA_UUID" "$DATA_MOUNT" >> /etc/fstab
+  fi
+  mountpoint -q "$DATA_MOUNT" || mount "$DATA_MOUNT"
+  mkdir -p "$DATA_MOUNT/docker"
+  systemctl restart docker.service
 fi
-DATA_UUID=$(blkid -s UUID -o value "$DATA_DEVICE")
-[ -n "$DATA_UUID" ] || fail "managed data disk has no filesystem UUID"
-mkdir -p "$DATA_MOUNT"
-if ! grep -qF "UUID=$DATA_UUID $DATA_MOUNT " /etc/fstab; then
-  printf 'UUID=%s %s ext4 defaults,nofail 0 2\n' "$DATA_UUID" "$DATA_MOUNT" >> /etc/fstab
-fi
-mountpoint -q "$DATA_MOUNT" || mount "$DATA_MOUNT"
-mkdir -p "$DATA_MOUNT/docker" "$DATA_MOUNT/backups/cerebro-agent"
+mkdir -p "$DATA_MOUNT/backups/cerebro-agent"
 chmod 0700 "$DATA_MOUNT/backups/cerebro-agent"
 
 if [ -e /var/backups/cerebro-agent ] && [ ! -L /var/backups/cerebro-agent ]; then
@@ -53,7 +73,6 @@ if [ -e /var/backups/cerebro-agent ] && [ ! -L /var/backups/cerebro-agent ]; the
     fail "/var/backups/cerebro-agent contains unexpected local data"
 fi
 ln -sfn "$DATA_MOUNT/backups/cerebro-agent" /var/backups/cerebro-agent
-systemctl restart docker.service
 
 CEREBRO_BOOTSTRAP_DEFER_TIMERS=true "$DEPLOY_ROOT/bootstrap.sh" >/dev/null
 
@@ -172,7 +191,7 @@ mv "$compose_tmp" "$COMPOSE_ENV"
 
 new_hash=$(sha256sum "$RUNTIME_ENV" "$COMPOSE_ENV" | sha256sum | cut -d' ' -f1)
 /usr/local/sbin/cerebro-registry-login.sh
-systemctl enable --now cerebro-agent-update.timer cerebro-agent-backup.timer >/dev/null
+systemctl enable --now cerebro-agent-backup.timer >/dev/null
 
 if [ "$old_hash" != "$new_hash" ]; then
   log "configuration changed; performing a drained Compose update"
@@ -182,4 +201,6 @@ else
   /usr/local/bin/cerebro-agent-update.sh
 fi
 
+# Only now let the timer follow the configured tag again.
+systemctl enable --now cerebro-agent-update.timer >/dev/null
 log "runtime is ready"
