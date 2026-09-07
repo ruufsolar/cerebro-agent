@@ -10,7 +10,7 @@
    In `review`/`apply`, it sets native Slack status. For a real image-capable runner, only the
    triggering message's accepted screenshots are resolved, streamed, validated, and placed
    in a private per-run temporary directory; historical screenshots remain placeholders.
-5. A no-tool router on the small Luna deployment classifies the transcript and triggering images.
+5. A no-tool router on the small deployment classifies the transcript and triggering images.
    Certain general requests use the general specialist; payment, mixed, uncertain, invalid, and
    adversarial classifications use the payment specialist. Both stages share one deadline.
 6. The selected Agents SDK specialist autonomously calls its bounded read tools. Payment gets

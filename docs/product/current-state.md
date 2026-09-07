@@ -62,7 +62,8 @@ Last updated: 2026-09-07.
 - Base64 data-URL multimodal model input at `detail: high`; no OpenAI Files uploads, image
   persistence, external traces, historical-image replay, or image content in audits.
 - Explicit partial-image fallback counts and a synthetic opt-in Azure vision evaluation.
-- Azure main-deployment default changed to the deployment serving GPT-5.6 Luna; Responses,
+- Azure main-deployment default is the deployment serving GPT-5.6 Sol (changed from GPT-5.6
+  Luna on 2026-09-07 after a live twenty-case pass); Responses,
   medium reasoning, vision, structured output, and existing runtime budgets remain unchanged.
 - Four explicit outcomes: matched, ambiguous, no customer found, and out of scope.
 - Opaque evidence IDs and a per-run evidence ledger. The model selects evidence, while
@@ -90,7 +91,7 @@ Last updated: 2026-09-07.
   deployment readiness gate that preserves the `last-good` rollback path.
 - Hard ten-case pilot gates for quality, screenshots, feedback, grounding, response length,
   end-to-end latency, and model-token usage.
-- Structured no-tool routing on the configured small Luna deployment, with low reasoning and a
+- Structured no-tool routing on the configured small deployment (currently Sol), with low reasoning and a
   payment-safe default for mixed, uncertain, invalid, or adversarial classifications.
 - Separate payment and general specialists. Payment keeps the verified evidence ledger; general
   receives only approved FinOps knowledge, schema descriptions, and scoped read-only SQL.

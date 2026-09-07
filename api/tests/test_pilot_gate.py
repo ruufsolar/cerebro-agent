@@ -51,7 +51,7 @@ def _case(index: int, *, image: bool = False) -> PilotRow:
         prompt_version="payment-identification-slice5-v1",
         knowledge_version="payment-identification-knowledge-v3",
         completion_reason="completed",
-        model="gpt-5-6-luna",
+        model="gpt-5-6-sol",
         input_tokens=10_000,
         output_tokens=200,
         steps=[{"type": "image_ingestion", "downloaded": 1 if image else 0}],
@@ -89,7 +89,7 @@ def test_ten_case_pilot_passes_with_balanced_limits() -> None:
 
     assert report["passed"] is True
     assert report["score"] == "10/10"
-    assert report["deployment"] == "gpt-5-6-luna"
+    assert report["deployment"] == "gpt-5-6-sol"
     assert report["positive_cases"] == 10
     assert report["image_cases"] == 4
     assert report["latency"] == {"median_seconds": 30.0, "p95_seconds": 30.0}

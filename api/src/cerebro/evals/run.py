@@ -159,7 +159,7 @@ async def _run_case(case: EvalCase) -> tuple[RunnerResult, str, int]:
 async def run_live(json_output: Path | None = None, case_ids: set[str] | None = None) -> int:
     config = get_config()
     if not config.azure_agent_ready:
-        raise SystemExit("Azure endpoint, API key, and Luna deployment are required for --live")
+        raise SystemExit("Azure endpoint, API key, and main deployment are required for --live")
     corpus = load_corpus()
     cases = [case for case in corpus.cases if case_ids is None or case.id in case_ids]
     if not cases:
@@ -269,7 +269,7 @@ def main() -> None:
     if len(corpus.cases) != 20:
         raise SystemExit(f"Slice 5 requires exactly 20 cases; found {len(corpus.cases)}")
     if not args.live:
-        print(f"Validated 20 synthetic cases ({corpus.version}); use --live to run Luna.")
+        print(f"Validated 20 synthetic cases ({corpus.version}); use --live to call Azure.")
         return
     requested = set(args.case_ids) if args.case_ids else None
     if requested:

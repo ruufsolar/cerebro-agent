@@ -19,7 +19,7 @@ read replica through six audited tools for policy/schema lookup, candidate searc
 candidate verification, Vambe context, and allowlisted SQL. A recommendation is accepted
 only after deterministic candidate verification. Static PNG/JPEG/WebP screenshots from the
 triggering Slack message are securely downloaded, validated, sent as high-detail ephemeral
-model input, and deleted. The configured model default is GPT-5.6 Luna. Tool evidence is
+model input, and deleted. The configured model default is GPT-5.6 Sol. Tool evidence is
 referenced through per-run IDs, and application code owns outcomes, confidence, CRM links,
 ranking, and concise Spanish prose. Isolated control/agent workers, runtime readiness,
 privacy-safe local logs, and aggregate preflight/status/pilot tooling harden the pilot.

@@ -12,8 +12,8 @@ def test_config_is_safe_by_default() -> None:
     assert config.azure_agent_ready is False
     assert config.azure_agent_partially_configured is False
     assert config.slack_ready is False
-    assert config.azure_deployment_main == "gpt-5-6-luna"
-    assert config.azure_deployment_small == "gpt-5-6-luna"
+    assert config.azure_deployment_main == "gpt-5-6-sol"
+    assert config.azure_deployment_small == "gpt-5-6-sol"
     assert config.router_reasoning_effort == "low"
     assert config.general_max_words == 180
     assert config.readiness_profile is ReadinessProfile.FOUNDATION
