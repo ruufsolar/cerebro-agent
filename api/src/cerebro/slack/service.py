@@ -166,7 +166,7 @@ async def _process_reaction(session: AsyncSession, event: SlackEvent) -> UUID | 
         select(SlackOutput).where(
             SlackOutput.slack_channel_id == str(payload["channel"]),
             SlackOutput.slack_message_ts == str(payload["message_ts"]),
-            SlackOutput.kind == SlackOutputKind.INVESTIGATION,
+            SlackOutput.kind.in_([SlackOutputKind.INVESTIGATION, SlackOutputKind.GENERAL_REPLY]),
         )
     )
     if output is None:

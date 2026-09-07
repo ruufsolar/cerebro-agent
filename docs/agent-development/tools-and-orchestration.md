@@ -37,11 +37,16 @@ Each integration has a protocol and fake. Slice 1 uses a fake investigator behin
 Slack; later slices can run the live investigator behind a fake Slack surface. This makes
 failures attributable and keeps tests offline.
 
-Slice 3 exposes six typed operations: `read_finops_knowledge`,
+The payment specialist exposes six typed operations: `read_finops_knowledge`,
 `describe_database_tables`, `search_payment_candidates`, `verify_payment_candidate`,
 `search_vambe_messages`, and `run_readonly_sql`. The runtime selects the replica backend
 only when `CEREBRO_READ_REPLICA_URL` is present; otherwise it keeps the explicit unavailable
 backend. `FixtureInvestigationData` remains restricted to tests and opt-in synthetic evals.
+
+The general specialist receives only `read_finops_knowledge`, `describe_database_tables`, and
+`run_readonly_sql`. It never receives payment candidate search, candidate verification, or Vambe
+search. The router receives no tools. These grants are built in application code after routing;
+prompt text cannot widen them.
 
 Candidate discovery is deliberately weaker than authorization. Application state records
 which exact `(order_id, account_receivable_id)` pairs were returned by

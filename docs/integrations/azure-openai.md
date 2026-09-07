@@ -6,7 +6,8 @@ and state ownership remain in this repository; no persisted Foundry agent is req
 ## Baseline
 
 - Reuse Wattson's Azure/OpenAI deployment pattern and the OpenAI Responses API.
-- Configure the Azure resource endpoint, API key (initially), and exact deployment names.
+- Configure the Azure resource endpoint, API key (initially), and exact main/small deployment
+  names. Both may point to Luna initially, but they are independently configurable.
 - The `model` sent to Azure is the deployment name, which may differ from the catalog model
   ID. Do not silently substitute one for the other.
 - The Slice 5 default is an Azure deployment serving `gpt-5.6-luna`. The environment value
@@ -32,14 +33,15 @@ and [OpenAI model/vision availability](https://developers.openai.com/api/docs/mo
 
 ## Implemented runtime behavior
 
-`OpenAIAgentsRunner` uses the Luna main deployment, medium reasoning, Responses, disabled
+`OpenAIAgentsRunner` first uses the small deployment with low reasoning and no tools to route the
+request. It then uses the Luna main deployment with medium reasoning, Responses, disabled
 parallel tool calls, no response storage, and external tracing disabled. The application
 enforces an eight-turn, twenty-custom-tool, 4,096-output-token, and 180-second baseline.
 The custom-tool counter is application-owned rather than delegated to an API limit.
 
 Runner selection happens only at agent-worker startup:
 
-- endpoint + key + main deployment selects Azure;
+- endpoint + key + main and small deployments selects Azure;
 - no endpoint and no key selects the deterministic fake;
 - only one of endpoint/key fails startup instead of silently falling back.
 
@@ -61,6 +63,6 @@ application accepts a recommended customer only when `verify_payment_candidate` 
 that exact order/receivable pair in the same run. The model cites opaque evidence IDs;
 application code validates those IDs and owns confidence, ranking, CRM URLs, and prose.
 
-Before starting Slice 5, confirm the Azure resource actually contains the deployment named
-by `CEREBRO_AZURE_DEPLOYMENT_MAIN` and that it serves GPT-5.6 Luna. A deployment-not-found
-response is configuration failure, not permission to fall back silently to Sol.
+Before starting Cerebro, confirm the Azure resource contains both deployment names and that the
+main deployment serves GPT-5.6 Luna. A deployment-not-found response is configuration failure,
+not permission to fall back silently to Sol.

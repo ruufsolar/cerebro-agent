@@ -90,6 +90,7 @@ async def test_status_is_aggregate_and_never_surfaces_retained_content(clean_dat
     encoded = str(report)
 
     assert report["queues"].keys() == {"control", "agent"}
+    assert report["request_kinds"] == {"payment_identification": 1}
     assert report["failures"] == {
         "runs": {"runner_error": 1},
         "events": 1,

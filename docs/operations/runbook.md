@@ -85,6 +85,10 @@ GPT-5.6 Luna. Do not confuse the Azure deployment name with the OpenAI catalog m
 the deployment is missing, keep the capability off and ask the Azure owner for the correct
 Luna deployment; do not silently return to Sol.
 
+Conversational routing uses `CEREBRO_AZURE_DEPLOYMENT_SMALL` with low reasoning and no tools. It
+may name the same Luna deployment initially. Missing either main or small deployment is a startup
+and pilot-readiness failure.
+
 ## Screenshot unavailable or image cleanup alert
 
 Confirm the installed Slack bot token includes `files:read`, the file is Slack-hosted static

@@ -12,7 +12,9 @@ from cerebro.agent.models import (
     AgentUsage,
     CompletionReason,
     Confidence,
+    GeneralAnswer,
     PaymentIdentification,
+    RequestKind,
     ToolAuditRecord,
 )
 
@@ -71,6 +73,20 @@ class AgentRunResult:
     tool_calls: tuple[ToolAuditRecord, ...] = ()
 
 
+@dataclass(frozen=True)
+class GeneralAgentRunResult:
+    response: GeneralAnswer
+    steps: tuple[AgentStep, ...] = ()
+    usage: AgentUsage = field(default_factory=AgentUsage)
+    prompt_version: str | None = None
+    knowledge_version: str | None = None
+    completion_reason: CompletionReason = CompletionReason.COMPLETED
+    tool_calls: tuple[ToolAuditRecord, ...] = ()
+
+
+RunnerResult = AgentRunResult | GeneralAgentRunResult
+
+
 class AgentRunFailure(RuntimeError):
     """Fatal runner failure carrying the safe audit accumulated before it failed."""
 
@@ -81,11 +97,13 @@ class AgentRunFailure(RuntimeError):
         tool_calls: tuple[ToolAuditRecord, ...] = (),
         prompt_version: str | None = None,
         knowledge_version: str | None = None,
+        request_kind: RequestKind = RequestKind.PAYMENT_IDENTIFICATION,
     ) -> None:
         super().__init__(message)
         self.tool_calls = tool_calls
         self.prompt_version = prompt_version
         self.knowledge_version = knowledge_version
+        self.request_kind = request_kind
 
 
 class AgentRunner(Protocol):
@@ -94,7 +112,7 @@ class AgentRunner(Protocol):
 
     async def start(self) -> None: ...
 
-    async def run(self, run_input: AgentRunInput) -> AgentRunResult: ...
+    async def run(self, run_input: AgentRunInput) -> RunnerResult: ...
 
     async def close(self) -> None: ...
 

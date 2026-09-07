@@ -11,6 +11,7 @@ from cerebro.agent.models import (
     EvidenceStrength,
     IdentificationOutcome,
     PaymentIdentification,
+    RequestKind,
 )
 from cerebro.db.enums import DeliveryStatus, RunStatus, SlackOutputKind
 from cerebro.db.models import AgentRun, Feedback, Message, SlackOutput, ToolCall
@@ -43,9 +44,10 @@ def _case(index: int, *, image: bool = False) -> PilotRow:
         id=run_id,
         conversation_id=conversation_id,
         trigger_message_id=trigger.id,
+        request_kind=RequestKind.PAYMENT_IDENTIFICATION,
         status=RunStatus.SUCCEEDED,
         structured_result=result.model_dump(mode="json"),
-        output_message="🧪 *Piloto.*\n*Resultado:* no encontré un cliente.",
+        output_message="*Resultado:* no encontré un cliente.",
         prompt_version="payment-identification-slice5-v1",
         knowledge_version="payment-identification-knowledge-v3",
         completion_reason="completed",
@@ -143,7 +145,7 @@ def test_pilot_rejects_customer_claim_without_successful_source_tool() -> None:
         evidence=[evidence],
     )
     rows[0].run.structured_result = matched.model_dump(mode="json")
-    rows[0].run.output_message = "🧪 *Piloto.*\n*Resultado:* coincidencia — confianza alta."
+    rows[0].run.output_message = "*Resultado:* coincidencia — confianza alta."
 
     report = grade_rows(rows)
 
@@ -294,7 +296,7 @@ def test_pilot_rejects_negative_high_confidence_match() -> None:
         investigation_summary="La dirección coincide.",
         evidence=[evidence],
     ).model_dump(mode="json")
-    rendered = "🧪 *Piloto.*\n*Resultado:* coincidencia — confianza alta."
+    rendered = "*Resultado:* coincidencia — confianza alta."
     rows[0].run.output_message = rendered
     rows[0].outputs[0].body = rendered
     rows[0].feedback[0].reaction = "electric_plug"
@@ -314,3 +316,15 @@ def test_pilot_rejects_negative_high_confidence_match() -> None:
     assert report["negative_high_confidence"] == 1
     assert "negative_high_confidence" in report["errors"]
     assert "negative_high_confidence" in report["cases"][0]["errors"]
+
+
+def test_pilot_gate_ignores_general_runs() -> None:
+    rows = [_case(index, image=index < 4) for index in range(10)]
+    general = _case(99)
+    general.run.request_kind = RequestKind.GENERAL
+    general.outputs[0].kind = SlackOutputKind.GENERAL_REPLY
+
+    report = grade_rows([general, *rows])
+
+    assert report["passed"] is True
+    assert report["case_count"] == 10

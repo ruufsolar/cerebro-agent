@@ -40,6 +40,7 @@ _ALLOWED_FIELDS = {
     "output_tokens",
     "prompt_version",
     "queue",
+    "request_kind",
     "recovered_events",
     "recovered_outputs",
     "recovered_runs",

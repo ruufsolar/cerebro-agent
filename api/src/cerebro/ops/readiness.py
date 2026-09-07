@@ -8,7 +8,7 @@ from cerebro.config import AppConfig, ReadinessProfile, get_config
 from cerebro.db.session import open_session
 from cerebro.ops.runtime import PILOT_COMPONENTS, component_health
 
-MIGRATION_HEAD = "20260902_0005"
+MIGRATION_HEAD = "20260907_0006"
 
 
 async def readiness_report(config: AppConfig | None = None) -> tuple[bool, dict[str, Any]]:

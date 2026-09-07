@@ -49,7 +49,9 @@ class AppConfig(BaseSettings):
     azure_deployment_small: str = "gpt-5-6-luna"
     azure_openai_use_responses: bool = True
     azure_reasoning_effort: str = "medium"
+    router_reasoning_effort: str = "low"
     azure_max_output_tokens: int = Field(default=4_096, ge=256, le=32_768)
+    general_max_words: int = Field(default=180, ge=40, le=500)
 
     global_mode: GlobalMode = GlobalMode.OFF
     payment_writes_enabled: bool = False
@@ -103,6 +105,7 @@ class AppConfig(BaseSettings):
                 self.azure_openai_endpoint,
                 self.azure_openai_api_key,
                 self.azure_deployment_main,
+                self.azure_deployment_small,
                 self.read_replica_url,
             )
         )
@@ -110,7 +113,10 @@ class AppConfig(BaseSettings):
     @property
     def azure_agent_ready(self) -> bool:
         return bool(
-            self.azure_openai_endpoint and self.azure_openai_api_key and self.azure_deployment_main
+            self.azure_openai_endpoint
+            and self.azure_openai_api_key
+            and self.azure_deployment_main
+            and self.azure_deployment_small
         )
 
     @property

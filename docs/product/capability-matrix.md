@@ -4,7 +4,8 @@
 |---|---|---|---|---|---|
 | Foundation health/state/jobs | Implemented; Slice 6A split workers, heartbeats, readiness, safe logs, operator CLIs, and Azure Terraform deployment reference | Process start / HTTP / CLI | Cerebro DB | Health/readiness response, durable jobs, aggregate local reports | No |
 | Payment identification V0 | Preview; Slice 5 grounded outcomes, concise text, component-aware customer/signee matching, ephemeral screenshot vision, live replica tools; pilot pending | Slack mention/follow-up | Stored transcript metadata; triggering screenshot bytes; allowed replica relations; candidate-scoped Vambe | Same-thread evidence-grounded Slack reply in review/apply | No business action |
-| Reaction feedback | Implemented | 🧀 / 🔌 | Cerebro investigation outputs | Feedback row; flavor reply on 🔌 | No |
+| General FinOps conversation | Implemented preview; Slice 6B structured routing, scoped reads, concise in-character answer | Slack mention/follow-up classified certainly general | Approved knowledge; schema descriptions; allowlisted read-only SQL; triggering images | Same-thread Slack reply in review/apply | No business action |
+| Reaction feedback | Implemented | 🧀 / 🔌 | Cerebro payment and general outputs | Feedback row; flavor reply on 🔌 | No |
 | Automatic bank investigation | Future | New bank movement | Bank + same V0 reads | Proactive FinOps proposal | No business action |
 | Register AR payment | Future | Explicit FinOps approval | Candidate + AR state | Monolith write API | Required |
 | Correct/revert AR payment | Future | Explicit FinOps approval | Existing association | Monolith write API | Required |
@@ -14,4 +15,5 @@
 
 `src/cerebro/capabilities/registry.py` is the executable subset of this matrix. Payment
 identification remains preview until the ten-case pilot, rollback drill, and FinOps signoff
-are complete; Slice 6A does not promote it to `live`.
+are complete; Slices 6A/6B do not promote it to `live`. General traffic is excluded from the
+payment pilot gate and is reported separately.

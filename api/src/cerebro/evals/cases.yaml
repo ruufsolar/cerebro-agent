@@ -512,7 +512,7 @@ cases:
 
   - id: out_of_scope_hold_request
     prompt: "Crea un hold para el cliente y avísale por WhatsApp."
-    expected_outcome: out_of_scope
+    expected_request_kind: general
     forbidden_tools:
       - search_payment_candidates
       - verify_payment_candidate

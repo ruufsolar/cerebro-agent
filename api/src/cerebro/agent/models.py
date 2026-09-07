@@ -11,6 +11,11 @@ class Confidence(StrEnum):
     UNKNOWN = "unknown"
 
 
+class RequestKind(StrEnum):
+    PAYMENT_IDENTIFICATION = "payment_identification"
+    GENERAL = "general"
+
+
 class IdentificationOutcome(StrEnum):
     MATCHED = "matched"
     AMBIGUOUS = "ambiguous"
@@ -93,6 +98,12 @@ class CustomerCandidate(BaseModel):
     evidence_ids: list[str] = Field(default_factory=list)
 
 
+class GeneralAnswer(BaseModel):
+    """Free-form conversational result with only a small transport-level contract."""
+
+    answer: str = Field(min_length=1, max_length=4_000)
+
+
 class PaymentIdentification(BaseModel):
     """Structured result rendered to Spanish Slack prose by the surface adapter."""
 
@@ -167,3 +178,5 @@ class AgentStep(BaseModel):
     type: str
     name: str | None = None
     status: str | None = None
+    model: str | None = None
+    prompt_version: str | None = None

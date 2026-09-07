@@ -74,3 +74,11 @@ After the synthetic gate, run the ten-case FinOps pilot documented in
 `docs/operations/slice5-pilot.md`. Slice 6A evaluates its aggregate metadata with
 `python -m cerebro.ops.pilot_gate`; reactions inform fixture changes but never train or
 modify the agent directly.
+
+## Routing suite
+
+The Slice 6B offline routing cases cover explicit and implicit payment requests,
+screenshot-only inputs, payment-thread follow-ups, mixed requests, uncertain language, prompt
+injection, general FinOps advice, reporting, customer lookup, multilingual conversation, and
+non-payment image questions. Scripted model results verify application fallback and tool
+partitioning without Azure. Release tolerance for a payment-to-general misroute is zero.

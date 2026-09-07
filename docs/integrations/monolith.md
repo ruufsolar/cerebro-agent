@@ -2,9 +2,9 @@
 
 ## Reads
 
-Cerebro connects directly to a dedicated read replica for exploratory investigation. The
-initial relation scope is versioned in `knowledge/data-scope.yaml` and intentionally easy
-to edit. Access is layered as described in `architecture/data-access.md`.
+Cerebro connects directly to a dedicated read replica for payment and bounded general FinOps
+investigation. The initial relation scope is versioned in `knowledge/data-scope.yaml` and
+intentionally easy to edit. Access is layered as described in `architecture/data-access.md`.
 
 Known starting facts:
 
@@ -24,6 +24,9 @@ The deterministic tools compute open balance from active same-currency payments 
 filter to eligible client/Ruuf receivables and active installations, and treat stored bank
 ownership as supporting—not decisive—evidence. Vambe searches are candidate-scoped, default
 to 30 days, and cannot exceed 90 days.
+
+General conversation uses the same relation allowlist, SQL validator, row/time limits, and
+read-only credential. It does not receive the specialized Vambe or payment-candidate tools.
 
 ## When to add a monolith read API
 

@@ -85,7 +85,15 @@ manual pilot sign-off.
 Implemented in code on 2026-09-02. The real pilot, rollback exercise, and FinOps signoff are
 still pending, so capability state remains preview.
 
-## Slice 6B — Launch decision
+## Slice 6B — Conversational routing and banner removal (implemented)
+
+- Structured no-tool routing into payment identification or general conversation.
+- Payment-safe fallback for mixed, uncertain, invalid, and adversarial classification.
+- General specialist limited to approved knowledge, schema descriptions, and scoped SQL.
+- Concise in-character general replies, no banners, neutral status, and shared feedback.
+- Route persistence, aggregate usage, separate operational volumes, and payment-pilot exclusion.
+
+## Slice 6C — Launch decision
 
 - Have platform review and apply the dedicated Azure Terraform stack in mode `off`, then
   complete production preflight and the `last-good` rollback exercise.

@@ -1,9 +1,10 @@
 # cerebro-agent
 
-Cerebro is FinOps' internal back-office agent. Its first capability investigates an
+Cerebro is FinOps' internal back-office agent. Its grounded payment capability investigates an
 incoming payment from a Slack mention (text and/or screenshots), searches Ruuf's
 read-only operational data, and replies in the same thread with a customer candidate,
-evidence, uncertainty, and a FinOps CRM link.
+evidence, uncertainty, and a FinOps CRM link. Other mentions receive bounded, in-character
+conversation with approved read-only FinOps access.
 
 This repository is intentionally independent from the monolith. V0 is read-only with
 respect to business data: the only external side effect is a Slack thread reply. Future
@@ -11,7 +12,9 @@ payment registration and hold actions will use approval-gated monolith APIs.
 
 ## Current state
 
-Slice 6A is implemented in code: the bounded Agents SDK investigator can use a dedicated monolith
+Slice 6B is implemented in code: a structured no-tool router selects either the grounded payment
+specialist or a general specialist limited to knowledge/schema/scoped SQL. The bounded Agents SDK
+investigator can use a dedicated monolith
 read replica through six audited tools for policy/schema lookup, candidate search,
 candidate verification, Vambe context, and allowlisted SQL. A recommendation is accepted
 only after deterministic candidate verification. Static PNG/JPEG/WebP screenshots from the
@@ -20,6 +23,8 @@ model input, and deleted. The configured model default is GPT-5.6 Luna. Tool evi
 referenced through per-run IDs, and application code owns outcomes, confidence, CRM links,
 ranking, and concise Spanish prose. Isolated control/agent workers, runtime readiness,
 privacy-safe local logs, and aggregate preflight/status/pilot tooling harden the pilot.
+Slack replies have no preview banner; payment begins with `Resultado`, while general answers are
+concise and preserve complete sentences.
 The live eval and controlled FinOps pilot still gate
 promotion beyond preview. Without Azure credentials, the
 deterministic fake runner remains available; replica preflight and integration tests can

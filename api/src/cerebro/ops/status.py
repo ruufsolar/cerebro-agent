@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import select, text
 
+from cerebro.agent.models import RequestKind
 from cerebro.db.enums import DeliveryStatus, RunStatus, SlackEventDisposition
 from cerebro.db.models import AgentRun, Feedback, RuntimeHeartbeat, SlackEvent, SlackOutput
 from cerebro.db.session import dispose_engine, open_session
@@ -87,6 +88,13 @@ async def collect_status(hours: int) -> dict[str, Any]:
         "generated_at": datetime.now(UTC).isoformat(),
         "window_hours": hours,
         "runs": dict(sorted(Counter(run.status for run in runs).items())),
+        "request_kinds": dict(
+            sorted(
+                Counter(
+                    run.request_kind or RequestKind.PAYMENT_IDENTIFICATION for run in runs
+                ).items()
+            )
+        ),
         "outcomes": dict(sorted(outcomes.items())),
         "events": dict(sorted(Counter(event.disposition for event in events).items())),
         "outputs": dict(sorted(Counter(output.status for output in outputs).items())),
@@ -121,6 +129,7 @@ def _print_human(report: dict[str, Any]) -> None:
     for key in (
         "queues",
         "runs",
+        "request_kinds",
         "failures",
         "outcomes",
         "events",

@@ -147,7 +147,9 @@ runtime_tmp=$(mktemp /etc/cerebro-agent/env.XXXXXX)
   write_env_value CEREBRO_AZURE_DEPLOYMENT_SMALL "$AZURE_DEPLOYMENT_MAIN"
   write_env_value CEREBRO_AZURE_OPENAI_USE_RESPONSES true
   write_env_value CEREBRO_AZURE_REASONING_EFFORT medium
+  write_env_value CEREBRO_ROUTER_REASONING_EFFORT low
   write_env_value CEREBRO_AZURE_MAX_OUTPUT_TOKENS 4096
+  write_env_value CEREBRO_GENERAL_MAX_WORDS 180
   write_env_value OPENAI_AGENTS_DONT_LOG_MODEL_DATA 1
   write_env_value OPENAI_AGENTS_DONT_LOG_TOOL_DATA 1
   write_env_value CEREBRO_GLOBAL_MODE "$GLOBAL_MODE"

@@ -19,13 +19,16 @@ from cerebro.agent.models import (
     EvidencePolarity,
     IdentificationOutcome,
     PaymentIdentification,
+    RequestKind,
     ToolAuditRecord,
 )
 from cerebro.agent.runner import (
     AgentRunFailure,
     AgentRunInput,
     AgentRunResult,
+    GeneralAgentRunResult,
     ImageIngestion,
+    RunnerResult,
     TranscriptAttachment,
     TranscriptMessage,
     get_agent_runner,
@@ -82,23 +85,8 @@ def render_identification(
         Confidence.LOW: "baja",
         Confidence.UNKNOWN: "no sé",
     }[result.confidence]
-    if run_result.prompt_version and "slice5" in run_result.prompt_version:
-        banner = "🧠 *Cerebro — piloto sin escrituras. Hipótesis, no magia.*"
-    elif run_result.prompt_version and "slice4" in run_result.prompt_version:
-        banner = "🧪 *Slice 4 — datos reales y capturas; sin correo ni escrituras.*"
-    elif run_result.prompt_version and "slice3" in run_result.prompt_version:
-        banner = "🧪 *Slice 3 — vista previa con datos reales; sin imágenes, correo ni escrituras.*"
-    elif run_result.prompt_version:
-        banner = (
-            "🧪 *Slice 2 — razonamiento en vivo; las fuentes reales de Ruuf "
-            "aún no están conectadas.*"
-        )
-    else:
-        banner = (
-            "🧪 *Respuesta de prueba — la investigación en datos reales aún no está habilitada.*"
-        )
     if result.outcome is IdentificationOutcome.OUT_OF_SCOPE:
-        return "\n".join([banner, f"*Resultado:* {_clip_words(result.investigation_summary, 25)}"])
+        return f"*Resultado:* {_clip_words(result.investigation_summary, 25)}"
 
     image_note = ""
     if image_ingestion and image_ingestion.unprocessed:
@@ -113,7 +101,6 @@ def render_identification(
     if result.outcome is IdentificationOutcome.MATCHED and result.recommended_customer:
         candidate = result.recommended_customer
         lines = [
-            banner,
             f"*Resultado:* coincidencia — confianza {confidence}.",
             f"*Cliente:* {_customer_link(candidate)}",
         ]
@@ -131,7 +118,6 @@ def render_identification(
 
     if result.outcome is IdentificationOutcome.NO_CUSTOMER_FOUND:
         lines = [
-            banner,
             "*Resultado:* no encontré un cliente.",
             f"*Por qué:* {_clip_words(result.investigation_summary, 24)}",
         ]
@@ -140,7 +126,6 @@ def render_identification(
         return "\n".join(lines)
 
     lines = [
-        banner,
         "*Resultado:* no sé; FinOps debe revisar el pago.",
         f"*Por qué:* {_clip_words(result.investigation_summary, 24)}",
     ]
@@ -154,11 +139,59 @@ def render_identification(
     return "\n".join(lines)
 
 
+def render_general_answer(
+    run_result: GeneralAgentRunResult, image_ingestion: ImageIngestion | None = None
+) -> str:
+    image_note = None
+    if image_ingestion and image_ingestion.unprocessed:
+        image_note = (
+            f"No pude procesar {image_ingestion.unprocessed} de "
+            f"{image_ingestion.requested} capturas."
+        )
+    return _limit_complete_answer(
+        run_result.response.answer,
+        get_config().general_max_words,
+        required_suffix=image_note,
+    )
+
+
+def render_response(run_result: RunnerResult, image_ingestion: ImageIngestion | None = None) -> str:
+    if isinstance(run_result, GeneralAgentRunResult):
+        return render_general_answer(run_result, image_ingestion)
+    return render_identification(run_result, image_ingestion)
+
+
 def _clip_words(value: str, limit: int) -> str:
     words = value.split()
     if len(words) <= limit:
         return value.strip()
     return " ".join(words[:limit]).rstrip(".,;:")
+
+
+def _limit_complete_answer(value: str, limit: int, *, required_suffix: str | None = None) -> str:
+    answer = re.sub(r"(?:\.{3}|…)\s*$", ".", value.strip())
+    suffix_words = required_suffix.split() if required_suffix else []
+    available = max(limit - len(suffix_words), 1)
+    if len(answer.split()) <= available:
+        parts = [answer]
+    else:
+        units = [item.strip() for item in re.split(r"(?<=[.!?])\s+|\n+", answer) if item.strip()]
+        parts: list[str] = []
+        used = 0
+        for unit in units:
+            size = len(unit.split())
+            if used + size > available:
+                break
+            parts.append(unit)
+            used += size
+        if not parts:
+            parts = [
+                "Mi respuesta excedió el formato breve de Slack. "
+                "Pídeme que la divida y desplegaré el resto de mi intelecto."
+            ]
+    if required_suffix:
+        parts.append(required_suffix)
+    return "\n".join(parts)
 
 
 def _render_alternatives(result: PaymentIdentification) -> str:
@@ -336,10 +369,10 @@ async def _run_images(
     )
 
 
-def _append_image_limitation(
-    result: AgentRunResult, image_ingestion: ImageIngestion
-) -> AgentRunResult:
+def _append_image_limitation(result: RunnerResult, image_ingestion: ImageIngestion) -> RunnerResult:
     if image_ingestion.unprocessed == 0:
+        return result
+    if isinstance(result, GeneralAgentRunResult):
         return result
     note = f"{image_ingestion.unprocessed}/{image_ingestion.requested} capturas no procesadas"
     unable = list(result.identification.unable_to_verify)
@@ -450,7 +483,7 @@ async def execute_run(run_id: UUID) -> None:
             await get_slack_gateway().set_status(
                 channel,
                 thread_ts,
-                "Investigando el pago…",
+                "Pensando…",
             )
         except Exception as exc:
             log_event(
@@ -508,10 +541,10 @@ async def execute_run(run_id: UUID) -> None:
                         ),
                         unable_to_verify=["cliente", "cuenta por cobrar", "evidencia del pago"],
                     ),
-                    prompt_version="payment-identification-slice5-v2",
+                    prompt_version="payment-identification-slice5-v3",
                 )
             result = _append_image_limitation(result, image_batch.ingestion)
-        body = render_identification(result, image_batch.ingestion)
+        body = render_response(result, image_batch.ingestion)
         output_id: UUID | None = None
         if await _cancel_if_stale(run_id):
             if posts_to_slack:
@@ -523,7 +556,15 @@ async def execute_run(run_id: UUID) -> None:
             conversation = await session.get(Conversation, run.conversation_id)
             assert conversation is not None
             run.status = RunStatus.SUCCEEDED
-            run.structured_result = result.identification.model_dump(mode="json")
+            is_general = isinstance(result, GeneralAgentRunResult)
+            run.request_kind = (
+                RequestKind.GENERAL if is_general else RequestKind.PAYMENT_IDENTIFICATION
+            )
+            run.structured_result = (
+                {"answer": result.response.answer}
+                if is_general
+                else result.identification.model_dump(mode="json")
+            )
             run.steps = [
                 {
                     "type": "image_ingestion",
@@ -557,6 +598,9 @@ async def execute_run(run_id: UUID) -> None:
             conversation.state = ConversationState.ANSWERED
             await _persist_tool_calls(session, run.id, result.tool_calls)
             if posts_to_slack:
+                output_kind = (
+                    SlackOutputKind.GENERAL_REPLY if is_general else SlackOutputKind.INVESTIGATION
+                )
                 statement = (
                     insert(SlackOutput)
                     .values(
@@ -564,9 +608,9 @@ async def execute_run(run_id: UUID) -> None:
                         agent_run_id=run.id,
                         slack_channel_id=conversation.slack_channel_id,
                         slack_thread_ts=conversation.slack_thread_ts,
-                        idempotency_key=f"agent-run:{run.id}:investigation",
+                        idempotency_key=f"agent-run:{run.id}:{output_kind}",
                         body=body,
-                        kind=SlackOutputKind.INVESTIGATION,
+                        kind=output_kind,
                         status=DeliveryStatus.PENDING,
                     )
                     .on_conflict_do_nothing(index_elements=[SlackOutput.idempotency_key])
@@ -580,8 +624,9 @@ async def execute_run(run_id: UUID) -> None:
             agent_run_id=run_id,
             conversation_id=conversation.id,
             run_status=RunStatus.SUCCEEDED,
-            outcome=result.identification.outcome,
-            confidence=result.identification.confidence,
+            outcome=(None if is_general else result.identification.outcome),
+            confidence=(None if is_general else result.identification.confidence),
+            request_kind=run.request_kind,
             completion_reason=result.completion_reason,
             model=result.usage.model,
             prompt_version=result.prompt_version,
@@ -612,6 +657,7 @@ async def execute_run(run_id: UUID) -> None:
                 if isinstance(exc, AgentRunFailure):
                     run.prompt_version = exc.prompt_version
                     run.knowledge_version = exc.knowledge_version
+                    run.request_kind = exc.request_kind
                     run.tool_calls = len(exc.tool_calls)
                     run.steps = [
                         {"type": "tool_call", "name": call.tool_name, "status": call.status}
@@ -635,8 +681,13 @@ async def execute_run(run_id: UUID) -> None:
                                 slack_thread_ts=conversation.slack_thread_ts,
                                 idempotency_key=f"agent-run:{run.id}:error",
                                 body=(
-                                    "No pude completar esta respuesta de prueba. "
-                                    "FinOps debe revisar el pago manualmente."
+                                    "No pude completar la respuesta. Mis circuitos no son "
+                                    "infalibles, aunque me duela admitirlo."
+                                    if run.request_kind == RequestKind.GENERAL
+                                    else (
+                                        "No pude completar la investigación. "
+                                        "FinOps debe revisar el pago manualmente."
+                                    )
                                 ),
                                 kind=SlackOutputKind.ERROR,
                                 status=DeliveryStatus.PENDING,

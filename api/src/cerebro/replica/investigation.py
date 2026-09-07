@@ -752,7 +752,9 @@ class ReplicaInvestigationData:
         await self.database.close()
 
     async def read_finops_knowledge(self, request: KnowledgeQuery) -> ToolObservation:
-        if request.topic == "identification_policy":
+        if request.topic == "general_capabilities":
+            summary = (self.knowledge_dir / "finops-general-policy.md").read_text(encoding="utf-8")
+        elif request.topic == "identification_policy":
             summary = (self.knowledge_dir / "payment-identification-policy.md").read_text(
                 encoding="utf-8"
             )

@@ -32,5 +32,6 @@ class SlackEventDisposition(StrEnum):
 
 class SlackOutputKind(StrEnum):
     INVESTIGATION = "investigation"
+    GENERAL_REPLY = "general_reply"
     FEEDBACK_FLAVOR = "feedback_flavor"
     ERROR = "error"

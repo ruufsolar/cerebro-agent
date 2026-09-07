@@ -5,6 +5,7 @@ from the engineering wiki: wiki text explains the system; knowledge text influen
 investigation.
 
 - `data-scope.yaml` declares the initial replica relations, business role, and search scope.
+- `finops-general-policy.md` defines the conversational read-only operating boundary.
 - `payment-identification-policy.md` is the normalized identification policy.
 - `monolith/SYNC.md` records which monolith facts were checked and known drift.
 

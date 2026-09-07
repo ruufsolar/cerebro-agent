@@ -10,18 +10,22 @@
    In `review`/`apply`, it sets native Slack status. For a real image-capable runner, only the
    triggering message's accepted screenshots are resolved, streamed, validated, and placed
    in a private per-run temporary directory; historical screenshots remain placeholders.
-5. The Agents SDK runner autonomously calls bounded read tools. Candidate search uses the
-   replica; final recommendations and alternatives require deterministic verification.
-   Without Azure the fake runner remains available, and without a replica the real runner
-   receives explicit source-unavailable observations.
-6. Immediately before the model call, validated images become direct Base64 data-URL
+5. A no-tool router on the small Luna deployment classifies the transcript and triggering images.
+   Certain general requests use the general specialist; payment, mixed, uncertain, invalid, and
+   adversarial classifications use the payment specialist. Both stages share one deadline.
+6. The selected Agents SDK specialist autonomously calls its bounded read tools. Payment gets
+   knowledge/schema/SQL plus candidate verification and candidate-scoped Vambe. General gets only
+   knowledge/schema/SQL. Without Azure the fake runner remains available, and without a replica
+   the real runner receives explicit source-unavailable observations.
+7. Immediately before the model call, validated images become direct Base64 data-URL
    `input_image` content with `detail: high`. The directory is removed on success, partial
    failure, timeout, provider/tool failure, or cancellation. Only counts/categories persist.
-7. Tools assign opaque evidence IDs. The model selects IDs; code validates ownership,
+8. For payment, tools assign opaque evidence IDs. The model selects IDs; code validates ownership,
    contradictions, ranking, outcome, and confidence, then renders concise Spanish prose.
-8. Code inserts `slack_output` with an idempotency key; a control worker sends one reply in
+   General output is a concise typed answer and has no access to the payment evidence contract.
+9. Code inserts `slack_output` with an idempotency key; a control worker sends one reply in
    the original thread using the output UUID as `client_msg_id`.
-9. A newer human message cancels an older run before delivery. Successful replies clear
+10. A newer human message cancels an older run before delivery. Successful replies clear
    native status naturally; cancellation/failure clears it explicitly.
 
 Repeated Slack delivery does not create a second event, message, run, or output.
@@ -34,7 +38,7 @@ It never answers in the channel root or creates a new surface.
 
 ## Feedback
 
-On `reaction_added`, only reactions to a known Cerebro output count. 🧀 records positive
+On `reaction_added`, only reactions to a known payment or general Cerebro output count. 🧀 records positive
 feedback. 🔌 records negative feedback and posts at most one in-character reply for that
 feedback identity. `reaction_removed` deactivates the row.
 

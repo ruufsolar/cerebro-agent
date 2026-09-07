@@ -1,8 +1,8 @@
-version: 4
+version: 5
 schema_version: 4
-last_reviewed: 2026-09-03
+last_reviewed: 2026-09-07
 owner: finops
-purpose: payment identification only
+purpose: internal FinOps payment identification and scoped read-only questions
 
 candidate_defaults:
   debtor_type: client
@@ -14,7 +14,7 @@ candidate_defaults:
   supported_currencies: [CLP, USD, CLF]
   outstanding_formula: account_receivable_amount - active_same_currency_payments - active_same_currency_losses
 
-pii_allowed_for_internal_identification: [rut, bank_account, phone, email, address]
+pii_allowed_for_internal_use: [rut, bank_account, phone, email, address]
 
 relations:
   - {name: user, reason: customer identity and relationships}

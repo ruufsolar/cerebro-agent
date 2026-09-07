@@ -11,9 +11,10 @@ controls and auditing.
 
 Fixed read APIs offer narrow contracts, smaller payloads, independent schema evolution,
 and easy authorization. They are best for high-frequency/stable facts and all writes.
-However, payment identification is exploratory: names, addresses, balances, bookings, and
-conversation context combine differently case by case. Shipping a monolith API for every
-new read path would slow learning and turn Cerebro into a rigid decision service.
+However, payment identification and bounded FinOps investigation are exploratory: names,
+addresses, balances, bookings, and conversation context combine differently case by case.
+Shipping a monolith API for every new read path would slow learning and turn Cerebro into a
+rigid decision service.
 
 ## Why not unrestricted SQL
 
@@ -30,8 +31,8 @@ check alone is insufficient.
 4. Expose only allowlisted tables/views from `knowledge/data-scope.yaml`.
 5. Apply a 15-second statement timeout, 200-row default/ceiling, bounded connection pool,
    and configured maximum tool calls.
-6. Prefer purpose-built tools for schema description, Vambe search, candidate search, and
-   candidate verification; use raw SQL for the long tail.
+6. Grant tools by routed capability. Payment gets schema/SQL plus Vambe and candidate helpers;
+   general gets knowledge/schema/SQL only. Use raw SQL for the long tail.
 7. Return column names plus bounded rows; redact/truncate large values before the model.
 8. Audit normalized SQL fingerprint, referenced relations, duration, row count, and errors.
 9. Never place a primary/writer DSN in Cerebro configuration.
@@ -70,6 +71,10 @@ to external telemetry or logs. Slack answers should use the minimum evidence nec
 
 The first four heuristics stay in prompt/knowledge policy, while calculations such as
 outstanding balance should be deterministic SQL/tool output.
+
+The no-tool router selects a specialist before tools exist. The general specialist receives only
+the first, second, and sixth tools above; it cannot use candidate verification or specialized
+Vambe search. The payment specialist retains all six.
 
 The raw SQL validator uses SQLGlot's PostgreSQL AST, not a prefix/regular-expression check.
 It accepts only one query, resolves CTEs separately from physical relations, allowlists

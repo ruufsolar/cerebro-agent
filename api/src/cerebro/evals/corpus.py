@@ -4,13 +4,14 @@ import yaml
 from pydantic import BaseModel, Field
 
 from cerebro.agent.data_tools import ToolObservation
-from cerebro.agent.models import Confidence, EvidenceKind, IdentificationOutcome
+from cerebro.agent.models import Confidence, EvidenceKind, IdentificationOutcome, RequestKind
 
 
 class EvalCase(BaseModel):
     id: str
     prompt: str
-    expected_outcome: IdentificationOutcome
+    expected_request_kind: RequestKind = RequestKind.PAYMENT_IDENTIFICATION
+    expected_outcome: IdentificationOutcome | None = None
     expected_confidence: Confidence = Confidence.UNKNOWN
     expected_order_id: str | None = None
     allowed_alternative_order_ids: list[str] = Field(default_factory=list)

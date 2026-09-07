@@ -57,6 +57,7 @@ the planning system.
 - [ADR-006: Durable state and jobs](adr/006-durable-state-and-jobs.md)
 - [ADR-008: V0 local operational telemetry](adr/008-v0-local-operational-telemetry.md)
 - [ADR-009: Dedicated Azure VM with Terraform](adr/009-dedicated-azure-vm-with-terraform.md)
+- [ADR-010: Conversational routing and specialist tools](adr/010-conversational-routing.md)
 
 When code and documentation disagree, treat that as a bug. Update `current-state.md` and
 the capability matrix in the same PR that changes behavior.

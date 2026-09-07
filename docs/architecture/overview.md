@@ -11,12 +11,14 @@ event ingestion --dedupe--> Cerebro PostgreSQL --> control queue
                                              Slack I/O    agent queue
                                                                |
                                       run orchestrator / budgets
-                                      /        |          \
-                              knowledge    replica tools   Vambe search
-                                      \        |          /
-                                       OpenAI Agents SDK
-                                              |
-                                  structured identification
+                                                |
+                                      no-tool request router
+                                      /                     \
+                           payment specialist       general specialist
+                           /       |       \          /              \
+                    candidates   Vambe   SQL      knowledge           SQL
+                                      \            /
+                                      validated result
                                               |
                                     Slack outbox/thread reply
                                               |
@@ -34,9 +36,9 @@ an idempotent outbox record so retries do not produce duplicate answers.
 - **Surface adapter:** Slack Socket Mode, mentions, thread context, images, status, replies,
   and reactions.
 - **Run orchestrator:** durable state transitions, timeout/turn/tool budgets, retry rules,
-  and structured result validation.
+  request routing, specialist tool grants, and structured result validation.
 - **Agent runner:** small protocol with an OpenAI Agents SDK adapter and fakes.
-- **Knowledge tools:** curated product semantics and the configurable candidate/data scope.
+- **Knowledge tools:** curated product semantics and the configurable FinOps/data scope.
 - **Replica tools:** schema allowlist, read-only SQL, Vambe search, and deterministic
   candidate verification helpers.
 - **Cerebro DB:** operational state only; not a copy of monolith business data.

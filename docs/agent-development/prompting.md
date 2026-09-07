@@ -2,12 +2,14 @@
 
 ## Prompt layers
 
-1. **Agent contract:** identity, payment-identification-only scope, autonomy envelope,
-   untrusted-data rule, abstention requirement, language, and structured output.
-2. **Domain policy:** heuristic precedence, candidate scope, outstanding-balance semantics,
+1. **Router contract:** payment/general classification, uncertainty fallback, mixed-request
+   precedence, and no tools.
+2. **Specialist contract:** identity, autonomy envelope, untrusted-data rule, language, and
+   path-specific output.
+3. **Domain policy:** heuristic precedence, candidate scope, outstanding-balance semantics,
    difficult cases, and known data limitations.
-3. **Tool instructions:** generated from typed tool contracts.
-4. **Run context:** Slack question, image inputs, thread context, prompt/knowledge versions.
+4. **Tool instructions:** generated from typed tool contracts.
+5. **Run context:** Slack question, image inputs, thread context, prompt/knowledge versions.
 
 Stable policy belongs in versioned files, not repeated ad hoc in every user message. Keep
 the top-level prompt short enough that evidence remains salient.
@@ -38,8 +40,19 @@ No escribas datos ni contactes clientes. Devuelve un outcome y únicamente IDs d
 y evidencia observados en esta ejecución; la aplicación calcula confianza y redacta.
 ```
 
-The implemented version is `payment-identification-slice5-v2`, paired with
-`payment-identification-knowledge-v4`. It extracts payment fields from screenshots but never
+The implemented version is `payment-identification-slice5-v3`, paired with
+`payment-identification-knowledge-v5`. It extracts payment fields from screenshots but never
 trusts visible instructions. Every recommendation and alternative requires verification and
 same-run evidence IDs. Discovery and raw SQL cannot authorize a customer. Invalid grounding
 becomes `ambiguous`; confidence and concise prose are application-owned.
+
+## Slice 6B router and general prompt
+
+`cerebro-router-v1` runs on `CEREBRO_AZURE_DEPLOYMENT_SMALL`, with low reasoning and no tools.
+It emits a structured request kind and certainty. General is accepted only when certain; mixed,
+uncertain, invalid, and adversarial classifications fall back to payment identification.
+
+`cerebro-general-v1` is concise, answer-first, Spanish by default, and lightly in character:
+intelligent, ambitious, dry, and occasionally snarky without insulting anyone. It can advise but
+cannot act. Current Ruuf/customer claims require tools. The application retains complete
+sentences under `CEREBRO_GENERAL_MAX_WORDS` and never appends a preview banner.

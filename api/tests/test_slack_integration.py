@@ -11,7 +11,9 @@ from cerebro.agent.models import (
     AgentUsage,
     CompletionReason,
     Confidence,
+    GeneralAnswer,
     PaymentIdentification,
+    RequestKind,
     ToolAuditRecord,
 )
 from cerebro.agent.runner import (
@@ -19,6 +21,7 @@ from cerebro.agent.runner import (
     AgentRunInput,
     AgentRunResult,
     FakeAgentRunner,
+    GeneralAgentRunResult,
     TranscriptAttachment,
     set_agent_runner,
 )
@@ -123,6 +126,36 @@ class InspectingVisionRunner(FakeAgentRunner):
         assert run_input.image_paths[0].exists()
         self.observed_bytes = run_input.image_paths[0].read_bytes()
         return await super().run(run_input)
+
+
+class GeneralRunner:
+    def __init__(self) -> None:
+        self.calls: list[AgentRunInput] = []
+
+    @property
+    def supports_image_input(self) -> bool:
+        return True
+
+    async def start(self) -> None:
+        return None
+
+    async def close(self) -> None:
+        return None
+
+    async def run(self, run_input: AgentRunInput) -> GeneralAgentRunResult:
+        self.calls.append(run_input)
+        return GeneralAgentRunResult(
+            response=GeneralAnswer(
+                answer=(
+                    "Conciliación confirma que el movimiento y el registro coinciden; "
+                    "cobranza persigue lo que todavía falta. Hasta los humanos merecen "
+                    "dos nombres para dos problemas."
+                )
+            ),
+            prompt_version="cerebro-general-v1",
+            knowledge_version="finops-read-scope-v5",
+            usage=AgentUsage(model="gpt-5-6-luna", input_tokens=100, output_tokens=30, turns=2),
+        )
 
 
 def message_envelope(
@@ -258,6 +291,50 @@ async def test_event_message_run_output_and_delivery_are_idempotent(
     assert len(gateway.posts) == 1
     assert gateway.posts[0][0:2] == ("C1", "100.1")
     assert gateway.posts[0][3] == str(output_id)
+
+
+async def test_general_reply_is_persisted_delivered_and_accepts_feedback(
+    clean_database: None,
+    memory_jobs: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del clean_database, memory_jobs
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "review")
+    get_config.cache_clear()
+    gateway = FakeSlackGateway()
+    set_slack_gateway(gateway)
+    set_agent_runner(GeneralRunner())
+
+    await store_and_process(
+        message_envelope("Ev-general", text="¿Qué diferencia hay entre conciliación y cobranza?")
+    )
+    async with open_session() as session:
+        run_id = await session.scalar(select(AgentRun.id))
+    assert run_id is not None
+    await execute_run(run_id)
+
+    async with open_session() as session:
+        run = await session.get(AgentRun, run_id)
+        output = await session.scalar(select(SlackOutput))
+    assert run is not None and output is not None
+    assert run.request_kind == RequestKind.GENERAL
+    assert run.structured_result is not None
+    assert set(run.structured_result) == {"answer"}
+    assert output.kind == SlackOutputKind.GENERAL_REPLY
+    assert "Slice" not in output.body
+    assert gateway.statuses == [("C1", "100.1", "Pensando…")]
+
+    await deliver_output(output.id)
+    await store_and_process(
+        reaction_envelope("Ev-general-plug", "reaction_added", "electric_plug", "200.1")
+    )
+    async with open_session() as session:
+        feedback = await session.scalar(select(Feedback))
+        flavor = await session.scalar(
+            select(SlackOutput).where(SlackOutput.kind == SlackOutputKind.FEEDBACK_FLAVOR)
+        )
+    assert feedback is not None and feedback.sentiment == "negative"
+    assert flavor is not None and flavor.body == "Arrrrgghhh ⚡️☠️"
 
 
 async def test_twenty_five_mixed_deliveries_remain_idempotent(

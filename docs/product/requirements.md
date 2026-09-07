@@ -16,10 +16,11 @@ The intended production flow is eventually:
 
 ## V0 scope
 
-V0 supports exactly one task. Any member can mention `@cerebro` in a channel where the app
-is installed and ask, in natural language, which customer an incoming deposit belongs to.
-The message may contain a transcription, screenshots, or both. Cerebro investigates and
-answers in the same Slack thread, in Spanish by default.
+Any member can mention `@cerebro` in a private channel where the app is installed. Cerebro
+classifies the latest request as payment identification or general conversation, then answers in
+the same Slack thread, in Spanish by default. Incoming-payment questions may contain a
+transcription, screenshots, or both and retain the strict evidence-grounded investigation flow.
+Mixed or uncertain requests use that stricter payment flow.
 
 V0 may:
 
@@ -31,6 +32,9 @@ V0 may:
 - post a Slack thread reply and temporary native Slack status;
 - record runs, tool calls, delivery attempts, and reactions in Cerebro's own database;
 - keep operational analytics in privacy-safe local logs and Cerebro state during V0.
+- answer bounded general conversation and FinOps questions using approved knowledge, schema
+  descriptions, and allowlisted read-only SQL;
+- provide operational advice without claiming to perform the recommended action.
 
 V0 may not:
 
@@ -41,10 +45,12 @@ V0 may not:
 - ingest PDFs;
 - run on automatic bank movements;
 - mutate the replica or call an unrestricted write endpoint;
-- answer unrelated general-purpose tasks.
+- browse the web or introduce undeclared external sources;
+- expose payment candidate-verification or specialized Vambe tools in the general flow.
 
-If the request is not payment identification, Cerebro should briefly state its current
-scope and remain in the thread.
+General conversation is intentionally useful but bounded: Cerebro is not a general execution
+agent. Current Ruuf/customer claims require tool evidence, and all write-like requests receive
+advice rather than action.
 
 ## Identification heuristic
 
@@ -83,7 +89,7 @@ live in `knowledge/data-scope.yaml` and can be reviewed manually.
 
 ## Expected reply
 
-The reply must include:
+An identification reply must include:
 
 - recommended customer and FinOps CRM URL, or an explicit “no encontré un cliente”;
 - one-line human description of the likely AR, never merely its database ID, or an explicit note
@@ -97,9 +103,12 @@ The reply must include:
 If the first transfer has no glosa and a different transferor name, Cerebro must not guess.
 It should say it does not know and leave the case for manual review.
 
+A general reply leads with the answer, stays around 180 words, follows the user's clear language,
+and may use one restrained in-character flourish. It must not be clipped mid-sentence.
+
 ## Feedback flavor
 
-- 🧀 on Cerebro's reply means correct/useful.
+- 🧀 on a payment or general Cerebro reply means correct/useful.
 - 🔌 means incorrect/unhelpful. Cerebro records negative feedback and replies once in the
   same thread with a short in-character pain reaction such as `Arrrrgghhh ⚡️☠️`.
 - Removing a reaction deactivates that feedback record.
@@ -115,7 +124,7 @@ No emoji changes business data.
   `no tengo idea, que revise FinOps`.
 - Approval-gated hold creation and automatic/specified reversal.
 - Proactive reports to a configured FinOps channel.
-- Broader FinOps back-office tasks added one explicit capability at a time.
+- Broader FinOps back-office actions added one explicit capability at a time.
 
 Customer acknowledgements remain another agent's responsibility; humans send them in V1.
 

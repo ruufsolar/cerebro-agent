@@ -14,6 +14,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
+from cerebro.agent.models import RequestKind
 from cerebro.db.base import Base, TimestampMixin
 from cerebro.db.enums import (
     ConversationState,
@@ -91,6 +92,7 @@ class AgentRun(TimestampMixin, Base):
     conversation_id: Mapped[UUID] = mapped_column(ForeignKey("conversation.id"))
     trigger_message_id: Mapped[UUID | None] = mapped_column(ForeignKey("message.id"))
     status: Mapped[str] = mapped_column(Text, default=RunStatus.QUEUED)
+    request_kind: Mapped[str] = mapped_column(Text, default=RequestKind.PAYMENT_IDENTIFICATION)
     input_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     steps: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
     structured_result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
@@ -113,6 +115,7 @@ class AgentRun(TimestampMixin, Base):
         UniqueConstraint("trigger_message_id", name="uq_agent_run_trigger_message"),
         Index("ix_agent_run_conversation_created", "conversation_id", text("created_at DESC")),
         Index("ix_agent_run_status", "status"),
+        Index("ix_agent_run_request_kind", "request_kind"),
     )
 
 

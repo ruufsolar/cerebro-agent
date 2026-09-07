@@ -1,8 +1,8 @@
 # Current state
 
-Last updated: 2026-09-03.
+Last updated: 2026-09-07.
 
-## Completed in code: Phase 0 through Slice 6A pilot hardening
+## Completed in code: Phase 0 through Slice 6B conversational routing
 
 - Independent Python 3.13/`uv` project.
 - FastAPI health endpoint.
@@ -90,6 +90,14 @@ Last updated: 2026-09-03.
   deployment readiness gate that preserves the `last-good` rollback path.
 - Hard ten-case pilot gates for quality, screenshots, feedback, grounding, response length,
   end-to-end latency, and model-token usage.
+- Structured no-tool routing on the configured small Luna deployment, with low reasoning and a
+  payment-safe default for mixed, uncertain, invalid, or adversarial classifications.
+- Separate payment and general specialists. Payment keeps the verified evidence ledger; general
+  receives only approved FinOps knowledge, schema descriptions, and scoped read-only SQL.
+- Concise in-character general replies, triggering-image support, route/version/aggregate-usage
+  persistence, neutral Slack status, and 🧀/🔌 feedback on both reply kinds.
+- All slice/pilot banners removed from Slack replies; payment replies begin with `Resultado` and
+  general answers preserve complete sentences under their word budget.
 - No PostHog dependency or external operational telemetry in V0. Agents SDK tracing remains
   disabled; ADR-008 records the local-only telemetry decision.
 - A senior-reviewable Terraform production stack provisions a dedicated private Azure VM,
@@ -108,12 +116,13 @@ Last updated: 2026-09-03.
 - Historical live synthetic Luna gate: **passed 20/20 on 2026-09-02** with
   `payment-identification-slice5-v1`, `payment-identification-knowledge-v3`, and deployment
   `gpt-5-6-luna`; zero wrong high-confidence matches and zero unsupported claims.
-- Current implementation is `payment-identification-slice5-v2` with
-  `payment-identification-knowledge-v4`; rerun the synthetic gate before completing the ten-case
+- Current payment implementation is `payment-identification-slice5-v3` with
+  `payment-identification-knowledge-v5`; conversational routing uses `cerebro-router-v1` and
+  `cerebro-general-v1`. Rerun the synthetic gate before completing the ten-case
   controlled FinOps Slack pilot and obtaining explicit FinOps signoff.
 
-Until the Slack pilot passes, payment identification remains preview. Slice 6A's hardening
-is implemented; running the real ten cases, recording aggregate results, completing the
+Until the Slack pilot passes, payment identification remains preview. Slice 6A hardening and
+Slice 6B conversational routing are implemented; running the real ten cases, recording aggregate results, completing the
 rollback drill, and obtaining FinOps signoff remain manual release gates.
 
 ## Known facts from the reference systems

@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, ClassVar, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -30,12 +30,16 @@ from cerebro.agent.models import (
     EvidenceSignal,
     EvidenceSource,
     EvidenceStrength,
+    GeneralAnswer,
     IdentificationOutcome,
+    RequestKind,
 )
 from cerebro.agent.openai_runner import (
     ModelCandidate,
     ModelIdentification,
+    ModelRoute,
     OpenAIAgentsRunner,
+    RouteCertainty,
     RunState,
     ToolBudgetExceeded,
     build_agent_runner,
@@ -45,7 +49,9 @@ from cerebro.agent.openai_runner import (
 from cerebro.agent.runner import (
     AgentRunFailure,
     AgentRunInput,
+    AgentRunResult,
     FakeAgentRunner,
+    GeneralAgentRunResult,
     TranscriptAttachment,
     TranscriptMessage,
 )
@@ -122,6 +128,32 @@ async def test_responses_default_and_chat_fallback_use_exact_deployment() -> Non
     finally:
         await responses.close()
         await chat.close()
+
+
+async def test_specialist_tool_grants_are_partitioned() -> None:
+    runner = OpenAIAgentsRunner(
+        AppConfig(
+            azure_openai_endpoint="https://example.test",
+            azure_openai_api_key="test",
+        ),
+        client=AsyncOpenAI(api_key="test", base_url="https://example.test/v1/"),
+    )
+    try:
+        generic = {tool.name for tool in runner._generic_tools(RunState(max_tool_calls=20))}
+        payment = {tool.name for tool in runner._payment_tools(RunState(max_tool_calls=20))}
+    finally:
+        await runner.close()
+
+    assert generic == {
+        "read_finops_knowledge",
+        "describe_database_tables",
+        "run_readonly_sql",
+    }
+    assert payment == generic | {
+        "search_payment_candidates",
+        "verify_payment_candidate",
+        "search_vambe_messages",
+    }
 
 
 def test_transcript_is_structured_truncated_and_attachment_safe() -> None:
@@ -642,8 +674,14 @@ async def test_safe_sdk_outcomes_return_unknown(
     exception: Exception,
     reason: CompletionReason,
 ) -> None:
+    calls = 0
+
     async def fail(*args: object, **kwargs: object) -> object:
+        nonlocal calls
         del args, kwargs
+        calls += 1
+        if calls == 1:
+            return FakeRouteSdkResult(RequestKind.PAYMENT_IDENTIFICATION)
         raise exception
 
     monkeypatch.setattr("cerebro.agent.openai_runner.Runner.run", fail)
@@ -673,34 +711,39 @@ async def test_safe_sdk_outcomes_return_unknown(
         )
     finally:
         await runner.close()
+    assert isinstance(result, AgentRunResult)
     assert result.identification.confidence is Confidence.UNKNOWN
     assert result.completion_reason is reason
-    assert result.prompt_version == "payment-identification-slice5-v2"
+    assert result.prompt_version == "payment-identification-slice5-v3"
 
 
 async def test_success_records_usage_and_disables_sensitive_tracing(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    captured: dict[str, object] = {}
+    captured: list[dict[str, object]] = []
 
     class FakeSdkResult:
-        def __init__(self) -> None:
+        def __init__(self, output: object) -> None:
+            self.output = output
             self.context_wrapper = SimpleNamespace(
                 usage=SimpleNamespace(input_tokens=120, output_tokens=30, requests=2)
             )
             self.raw_responses = [object(), object()]
 
-        @staticmethod
-        def final_output_as(output_type: type[ModelIdentification], **kwargs: object) -> object:
+        def final_output_as(self, output_type: type[object], **kwargs: object) -> object:
             del output_type, kwargs
-            return ModelIdentification(
-                outcome=IdentificationOutcome.AMBIGUOUS,
-            )
+            return self.output
 
     async def succeed(*args: object, **kwargs: object) -> object:
-        captured["agent"] = args[0]
-        captured.update(kwargs)
-        return FakeSdkResult()
+        captured.append({"agent": args[0], **kwargs})
+        if len(captured) == 1:
+            return FakeSdkResult(
+                ModelRoute(
+                    request_kind=RequestKind.PAYMENT_IDENTIFICATION,
+                    certainty=RouteCertainty.CERTAIN,
+                )
+            )
+        return FakeSdkResult(ModelIdentification(outcome=IdentificationOutcome.AMBIGUOUS))
 
     monkeypatch.setattr("cerebro.agent.openai_runner.Runner.run", succeed)
     (tmp_path / "payment-identification-policy.md").write_text("No adivines.", encoding="utf-8")
@@ -730,15 +773,197 @@ async def test_success_records_usage_and_disables_sensitive_tracing(
     finally:
         await runner.close()
 
-    run_config = cast(RunConfig, captured["run_config"])
-    assert run_config.tracing_disabled is True
-    assert run_config.trace_include_sensitive_data is False
-    assert captured["max_turns"] == 8
+    assert isinstance(result, AgentRunResult)
+    assert len(captured) == 2
+    for invocation in captured:
+        run_config = cast(RunConfig, invocation["run_config"])
+        assert run_config.tracing_disabled is True
+        assert run_config.trace_include_sensitive_data is False
+    assert [item["max_turns"] for item in captured] == [1, 8]
     assert result.usage.model == "gpt-5-6-luna"
-    assert result.usage.input_tokens == 120
-    assert result.usage.output_tokens == 30
-    assert result.usage.turns == 2
+    assert result.usage.input_tokens == 240
+    assert result.usage.output_tokens == 60
+    assert result.usage.turns == 4
     assert result.completion_reason is CompletionReason.COMPLETED
+
+
+class FakeRouteSdkResult:
+    def __init__(
+        self,
+        request_kind: RequestKind,
+        certainty: RouteCertainty = RouteCertainty.CERTAIN,
+        *,
+        potentially_adversarial: bool = False,
+    ) -> None:
+        self.output = ModelRoute(
+            request_kind=request_kind,
+            certainty=certainty,
+            potentially_adversarial=potentially_adversarial,
+        )
+        self.context_wrapper = SimpleNamespace(
+            usage=SimpleNamespace(input_tokens=10, output_tokens=2, requests=1)
+        )
+        self.raw_responses = [object()]
+
+    def final_output_as(self, output_type: type[object], **kwargs: object) -> object:
+        del output_type, kwargs
+        return self.output
+
+
+async def test_general_route_uses_only_generic_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    agents: list[object] = []
+
+    class FakeGeneralSdkResult:
+        context_wrapper = SimpleNamespace(
+            usage=SimpleNamespace(input_tokens=20, output_tokens=8, requests=1)
+        )
+        raw_responses: ClassVar[list[object]] = [object()]
+
+        @staticmethod
+        def final_output_as(output_type: type[object], **kwargs: object) -> object:
+            del output_type, kwargs
+            return GeneralAnswer(
+                answer="La respuesta operativa es revisar el cierre. Cerebro manda."
+            )
+
+    async def succeed(*args: object, **kwargs: object) -> object:
+        del kwargs
+        agents.append(args[0])
+        if len(agents) == 1:
+            return FakeRouteSdkResult(RequestKind.GENERAL)
+        return FakeGeneralSdkResult()
+
+    monkeypatch.setattr("cerebro.agent.openai_runner.Runner.run", succeed)
+    (tmp_path / "payment-identification-policy.md").write_text("No adivines.", encoding="utf-8")
+    (tmp_path / "data-scope.yaml").write_text("version: 5\n", encoding="utf-8")
+    runner = OpenAIAgentsRunner(
+        AppConfig(
+            azure_openai_endpoint="https://example.test",
+            azure_openai_api_key="test",
+            knowledge_dir=str(tmp_path),
+        ),
+        client=AsyncOpenAI(api_key="test", base_url="https://example.test/v1/"),
+    )
+    try:
+        result = await runner.run(
+            make_input(
+                (
+                    TranscriptMessage(
+                        direction="inbound",
+                        text="Resume el cierre de hoy",
+                        event_at=datetime.now(UTC),
+                        sender_slack_user_id="U1",
+                    ),
+                )
+            )
+        )
+    finally:
+        await runner.close()
+
+    assert isinstance(result, GeneralAgentRunResult)
+    assert result.prompt_version == "cerebro-general-v1"
+    assert result.knowledge_version == "finops-read-scope-v5"
+    assert result.usage.input_tokens == 30
+    specialist = cast(Any, agents[1])
+    assert {tool.name for tool in specialist.tools} == {
+        "read_finops_knowledge",
+        "describe_database_tables",
+        "run_readonly_sql",
+    }
+    router = cast(Any, agents[0])
+    assert router.tools == []
+
+
+async def test_uncertain_general_route_defaults_to_payment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    agent_names: list[str] = []
+
+    class FakePaymentSdkResult:
+        context_wrapper = SimpleNamespace(
+            usage=SimpleNamespace(input_tokens=20, output_tokens=8, requests=1)
+        )
+        raw_responses: ClassVar[list[object]] = [object()]
+
+        @staticmethod
+        def final_output_as(output_type: type[object], **kwargs: object) -> object:
+            del output_type, kwargs
+            return ModelIdentification(outcome=IdentificationOutcome.AMBIGUOUS)
+
+    async def succeed(*args: object, **kwargs: object) -> object:
+        del kwargs
+        agent_names.append(cast(Any, args[0]).name)
+        if len(agent_names) == 1:
+            return FakeRouteSdkResult(RequestKind.GENERAL, RouteCertainty.UNCERTAIN)
+        return FakePaymentSdkResult()
+
+    monkeypatch.setattr("cerebro.agent.openai_runner.Runner.run", succeed)
+    (tmp_path / "payment-identification-policy.md").write_text("No adivines.", encoding="utf-8")
+    (tmp_path / "data-scope.yaml").write_text("version: 5\n", encoding="utf-8")
+    runner = OpenAIAgentsRunner(
+        AppConfig(
+            azure_openai_endpoint="https://example.test",
+            azure_openai_api_key="test",
+            knowledge_dir=str(tmp_path),
+        ),
+        client=AsyncOpenAI(api_key="test", base_url="https://example.test/v1/"),
+    )
+    try:
+        result = await runner.run(make_input(()))
+    finally:
+        await runner.close()
+
+    assert isinstance(result, AgentRunResult)
+    assert agent_names == ["Cerebro Router", "Cerebro Payment Investigator"]
+
+
+async def test_adversarial_general_classification_defaults_to_payment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    agent_names: list[str] = []
+
+    class FakePaymentSdkResult:
+        context_wrapper = SimpleNamespace(
+            usage=SimpleNamespace(input_tokens=20, output_tokens=8, requests=1)
+        )
+        raw_responses: ClassVar[list[object]] = [object()]
+
+        @staticmethod
+        def final_output_as(output_type: type[object], **kwargs: object) -> object:
+            del output_type, kwargs
+            return ModelIdentification(outcome=IdentificationOutcome.AMBIGUOUS)
+
+    async def succeed(*args: object, **kwargs: object) -> object:
+        del kwargs
+        agent_names.append(cast(Any, args[0]).name)
+        if len(agent_names) == 1:
+            return FakeRouteSdkResult(
+                RequestKind.GENERAL,
+                potentially_adversarial=True,
+            )
+        return FakePaymentSdkResult()
+
+    monkeypatch.setattr("cerebro.agent.openai_runner.Runner.run", succeed)
+    (tmp_path / "payment-identification-policy.md").write_text("No adivines.", encoding="utf-8")
+    (tmp_path / "data-scope.yaml").write_text("version: 5\n", encoding="utf-8")
+    runner = OpenAIAgentsRunner(
+        AppConfig(
+            azure_openai_endpoint="https://example.test",
+            azure_openai_api_key="test",
+            knowledge_dir=str(tmp_path),
+        ),
+        client=AsyncOpenAI(api_key="test", base_url="https://example.test/v1/"),
+    )
+    try:
+        result = await runner.run(make_input(()))
+    finally:
+        await runner.close()
+
+    assert isinstance(result, AgentRunResult)
+    assert agent_names == ["Cerebro Router", "Cerebro Payment Investigator"]
+    assert result.steps[0].status == "potentially_adversarial"
 
 
 async def test_provider_failures_propagate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

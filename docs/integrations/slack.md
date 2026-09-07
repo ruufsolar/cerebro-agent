@@ -7,7 +7,7 @@
 - Any workspace member may ask; no channel/user allowlist in V0.
 - Replies and follow-ups stay in the originating thread.
 - Spanish by default; honor a clear language request.
-- Native status communicates investigation progress.
+- Neutral native `Pensando…` status communicates progress.
 - Up to four images, 8 MiB each by initial recommendation; no PDF.
 - 🧀 positive and 🔌 negative feedback on Cerebro messages.
 
@@ -49,11 +49,15 @@ requires an app-level `connections:write` token created outside the manifest.
 - `review`: set native status and deliver the configured runner result in-thread.
 - `apply`: identical to `review` until approval-gated write capabilities exist.
 
-Only investigation outputs accept feedback. 🧀 records positive feedback. 🔌 records
+Payment and general outputs accept feedback. 🧀 records positive feedback. 🔌 records
 negative feedback and creates one idempotent same-thread `Arrrrgghhh ⚡️☠️`; flavor and
 error outputs cannot recursively trigger it. Reaction removal deactivates an existing row.
 The reaction must be placed on Cerebro's investigation reply, not the human root message. Safe
 logs distinguish an unknown-output reaction from recorded feedback without logging message text.
+
+Slack replies contain no preview/slice banner. A structured no-tool router selects the payment or
+general specialist. Cerebro is expected to be installed only in private channels because scoped
+general reads may return PII; this is an operational constraint, not a code-enforced allowlist.
 
 See [local Slack testing](../getting-started/local-slack-testing.md). Socket Mode is outbound,
 so this slice does not need Tailscale or an inbound tunnel.

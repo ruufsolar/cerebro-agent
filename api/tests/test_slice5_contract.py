@@ -1,11 +1,12 @@
 from cerebro.agent.models import (
     Confidence,
     CustomerCandidate,
+    GeneralAnswer,
     IdentificationOutcome,
     PaymentIdentification,
 )
-from cerebro.agent.runner import AgentRunResult
-from cerebro.slack.pipeline import render_identification
+from cerebro.agent.runner import AgentRunResult, GeneralAgentRunResult, ImageIngestion
+from cerebro.slack.pipeline import render_general_answer, render_identification
 
 
 def _customer(name: str = "Cliente Sintético") -> CustomerCandidate:
@@ -38,9 +39,11 @@ def test_matched_renderer_is_concise() -> None:
 
     assert len(rendered.splitlines()) <= 6
     assert len(rendered.split()) <= 110
+    assert rendered.startswith("*Resultado:*")
     assert "*Cliente:*" in rendered
     assert "*Por qué:*" in rendered
-    assert "Hipótesis, no magia" in rendered
+    assert "Slice" not in rendered
+    assert "Piloto" not in rendered
 
 
 def test_ambiguous_no_customer_and_out_of_scope_render_distinctly() -> None:
@@ -79,7 +82,7 @@ def test_ambiguous_no_customer_and_out_of_scope_render_distinctly() -> None:
     assert "no sé" in ambiguous
     assert "*Opciones:*" in ambiguous
     assert "no encontré un cliente" in no_customer
-    assert len(out_of_scope.splitlines()) == 2
+    assert len(out_of_scope.splitlines()) == 1
     assert "sólo identifica pagos entrantes" in out_of_scope
 
 
@@ -121,3 +124,25 @@ def test_renderer_enforces_absolute_length_caps_with_long_fields() -> None:
     assert len(ambiguous.split()) <= 130
     assert "…" not in matched
     assert "…" not in ambiguous
+
+
+def test_general_renderer_keeps_complete_sentences_and_image_limit() -> None:
+    answer = " ".join(f"Esta es la observación número {index}." for index in range(1, 80))
+    rendered = render_general_answer(
+        GeneralAgentRunResult(response=GeneralAnswer(answer=answer)),
+        ImageIngestion(requested=2, downloaded=1, rejected=1),
+    )
+
+    assert len(rendered.split()) <= 180
+    assert rendered.endswith("No pude procesar 1 de 2 capturas.")
+    assert "..." not in rendered
+    assert "…" not in rendered
+    assert rendered.splitlines()[0].endswith(".")
+
+
+def test_general_renderer_removes_a_trailing_ellipsis() -> None:
+    rendered = render_general_answer(
+        GeneralAgentRunResult(response=GeneralAnswer(answer="Mi brillante conclusión…"))
+    )
+
+    assert rendered == "Mi brillante conclusión."

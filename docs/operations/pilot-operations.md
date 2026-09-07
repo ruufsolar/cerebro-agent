@@ -34,13 +34,15 @@ Preflight checks the local schemas, replica safety/schema, temporary-image stora
 Slack authentication. Add `--live-provider` only when an explicit synthetic Azure smoke
 call and its cost are intended. It uses no real customer data.
 
-Status reports aggregate active queue depth, failures, outcomes, feedback, latency,
+Status reports aggregate active queue depth, failures, request-kind volumes, payment outcomes,
+feedback, latency,
 token/tool usage, image failures, and runtime components. The pilot gate labels rows only `case_01` through
 `case_10`; neither command prints customer, order, message, screenshot, or SQL content.
 
 ## Hard ten-case gate
 
-The selected channel/time range must contain exactly ten triggering runs. Passing requires:
+The selected channel/time range must contain exactly ten payment-identification triggering runs.
+General replies in the same window are excluded. Passing requires:
 
 - ten successful, singly delivered investigations and at least four screenshot cases;
 - a resolved 🧀/🔌 label for each case, at least nine positive, and no negative

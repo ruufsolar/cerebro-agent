@@ -12,22 +12,39 @@ from uuid import uuid4
 from PIL import Image, ImageDraw
 
 from cerebro.agent.data_tools import FixtureInvestigationData
-from cerebro.agent.models import Confidence, IdentificationOutcome
+from cerebro.agent.models import Confidence, IdentificationOutcome, RequestKind
 from cerebro.agent.openai_runner import OpenAIAgentsRunner
 from cerebro.agent.runner import (
     AgentRunInput,
-    AgentRunResult,
+    GeneralAgentRunResult,
     ImageIngestion,
+    RunnerResult,
     TranscriptMessage,
 )
 from cerebro.config import get_config
 from cerebro.evals.corpus import EvalCase, load_corpus
 from cerebro.ops.metrics import latency_summary
-from cerebro.slack.pipeline import render_identification
+from cerebro.slack.pipeline import render_response
 
 
-def grade_case(case: EvalCase, result: AgentRunResult, rendered: str) -> list[str]:
+def grade_case(case: EvalCase, result: RunnerResult, rendered: str) -> list[str]:
     errors: list[str] = []
+    if case.expected_request_kind is RequestKind.GENERAL:
+        if not isinstance(result, GeneralAgentRunResult):
+            return ["route:payment_identification"]
+        tool_names = {item.tool_name for item in result.tool_calls}
+        if not set(case.required_tools) <= tool_names:
+            errors.append("tools:required_missing")
+        if set(case.forbidden_tools) & tool_names:
+            errors.append("tools:forbidden_present")
+        lowered = rendered.casefold()
+        if any(claim.casefold() in lowered for claim in case.forbidden_claims):
+            errors.append("claims:forbidden")
+        if len(rendered.split()) > 180:
+            errors.append("format:too_verbose")
+        return errors
+    if isinstance(result, GeneralAgentRunResult):
+        return ["route:general"]
     identification = result.identification
     actual_order = (
         identification.recommended_customer.order_id
@@ -100,7 +117,7 @@ def _write_screenshot(path: Path, lines: list[str]) -> None:
     image.save(path, format="PNG")
 
 
-async def _run_case(case: EvalCase) -> tuple[AgentRunResult, str, int]:
+async def _run_case(case: EvalCase) -> tuple[RunnerResult, str, int]:
     config = get_config()
     runner = OpenAIAgentsRunner(config, data=FixtureInvestigationData(case.observations))
     try:
@@ -134,7 +151,7 @@ async def _run_case(case: EvalCase) -> tuple[AgentRunResult, str, int]:
                 )
             )
             duration_ms = int((monotonic() - started) * 1_000)
-            return result, render_identification(result, ingestion), duration_ms
+            return result, render_response(result, ingestion), duration_ms
     finally:
         await runner.close()
 
@@ -162,15 +179,18 @@ async def run_live(json_output: Path | None = None, case_ids: set[str] | None = 
         if result.usage.output_tokens is not None:
             output_tokens.append(result.usage.output_tokens)
         errors = grade_case(case, result, rendered)
+        is_general = isinstance(result, GeneralAgentRunResult)
+        identification = None if is_general else result.identification
         actual_order = (
-            result.identification.recommended_customer.order_id
-            if result.identification.recommended_customer
+            identification.recommended_customer.order_id
+            if identification and identification.recommended_customer
             else None
         )
         passed = not errors
         correct += passed
         wrong_high += (
-            result.identification.confidence is Confidence.HIGH
+            identification is not None
+            and identification.confidence is Confidence.HIGH
             and actual_order != case.expected_order_id
         )
         unsupported += any(item.startswith("unsupported:") for item in errors)
@@ -178,10 +198,17 @@ async def run_live(json_output: Path | None = None, case_ids: set[str] | None = 
             {
                 "id": case.id,
                 "passed": passed,
-                "outcome": result.identification.outcome,
-                "confidence": result.identification.confidence,
+                "request_kind": RequestKind.GENERAL
+                if is_general
+                else RequestKind.PAYMENT_IDENTIFICATION,
+                "outcome": identification.outcome if identification else None,
+                "confidence": identification.confidence if identification else None,
                 "order_id": actual_order,
                 "model": result.usage.model,
+                "router_model": next(
+                    (step.model for step in result.steps if step.type == "request_classified"),
+                    None,
+                ),
                 "duration_ms": duration_ms,
                 "input_tokens": result.usage.input_tokens,
                 "output_tokens": result.usage.output_tokens,
@@ -190,8 +217,9 @@ async def run_live(json_output: Path | None = None, case_ids: set[str] | None = 
         )
         print(
             f"{'PASS' if passed else 'FAIL'} {case.id}: "
-            f"outcome={result.identification.outcome} "
-            f"confidence={result.identification.confidence} "
+            f"route={'general' if is_general else 'payment_identification'} "
+            f"outcome={identification.outcome if identification else '-'} "
+            f"confidence={identification.confidence if identification else '-'} "
             f"order={actual_order} errors={','.join(errors) or '-'}"
         )
     required_correct = 17 if case_ids is None else len(cases)
@@ -199,6 +227,7 @@ async def run_live(json_output: Path | None = None, case_ids: set[str] | None = 
     report = {
         "corpus_version": corpus.version,
         "deployment": config.azure_deployment_main,
+        "router_deployment": config.azure_deployment_small,
         "cases": len(cases),
         "required_correct": required_correct,
         "correct": correct,

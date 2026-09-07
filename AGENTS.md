@@ -13,8 +13,8 @@
 ## Project invariants
 
 - Cerebro is an independent Python service, not a decision module inside the monolith.
-- V0 supports one task: identify an incoming payment from a Slack mention with text and/or
-  images and answer in the same thread.
+- V0 routes Slack mentions between grounded incoming-payment identification and bounded general
+  FinOps conversation. Payment requests must never bypass the specialist evidence validator.
 - The operational read replica is read-only. Never run DDL/DML, call stored procedures, or
   use it for future writes.
 - Business writes (payment association and holds) are out of scope until a dedicated,

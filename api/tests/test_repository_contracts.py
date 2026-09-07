@@ -22,7 +22,9 @@ def test_manifest_contains_v0_thread_and_feedback_events() -> None:
 def test_knowledge_scope_is_explicitly_read_only() -> None:
     scope = yaml.safe_load((REPO_ROOT / "knowledge/data-scope.yaml").read_text())
 
-    assert scope["purpose"] == "payment identification only"
+    assert scope["purpose"] == (
+        "internal FinOps payment identification and scoped read-only questions"
+    )
     assert scope["query_limits"]["statements"] == ["SELECT", "WITH"]
     assert "dml" in scope["query_limits"]["forbid"]
     assert "ddl" in scope["query_limits"]["forbid"]

@@ -5,9 +5,9 @@ channel with `CEREBRO_GLOBAL_MODE=review`; keep payment and hold writes disabled
 
 The historical synthetic gate passed 20/20 on 2026-09-02 using
 `payment-identification-slice5-v1`, `payment-identification-knowledge-v3`, and Azure deployment
-`gpt-5-6-luna`. The current `payment-identification-slice5-v2` /
-`payment-identification-knowledge-v4` behavior must be rerun because name matching and replica
-scope changed.
+`gpt-5-6-luna`. The current `payment-identification-slice5-v3` /
+`payment-identification-knowledge-v5` behavior must be rerun because name matching, replica
+scope, and pre-specialist routing changed.
 
 ## Prerequisites
 
@@ -44,7 +44,8 @@ only the evidence pattern and expected outcome; replace all identifying and paym
 
 FinOps must explicitly sign off on the results. Record only the aggregate score, gate date,
 prompt/knowledge versions, Azure deployment name, and reviewer role in the delivery checklist.
-Payment identification stays preview until this signoff is complete.
+Payment identification stays preview until this signoff is complete. General replies are excluded
+from selection and do not count toward the ten cases.
 
 Slice 6A automates the metadata-only gate. Select the exact private-channel/time window:
 

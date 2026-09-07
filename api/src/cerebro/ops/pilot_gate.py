@@ -10,7 +10,12 @@ from typing import Any
 
 from sqlalchemy import select
 
-from cerebro.agent.models import Confidence, IdentificationOutcome, PaymentIdentification
+from cerebro.agent.models import (
+    Confidence,
+    IdentificationOutcome,
+    PaymentIdentification,
+    RequestKind,
+)
 from cerebro.db.enums import DeliveryStatus, RunStatus, SlackOutputKind
 from cerebro.db.models import AgentRun, Feedback, Message, SlackOutput, ToolCall
 from cerebro.db.session import dispose_engine, open_session
@@ -112,6 +117,7 @@ async def _load_rows(channel: str, since: datetime, until: datetime) -> list[Pil
                         Message.slack_channel_id == channel,
                         Message.event_at >= since,
                         Message.event_at <= until,
+                        AgentRun.request_kind == RequestKind.PAYMENT_IDENTIFICATION,
                     )
                     .order_by(Message.event_at, AgentRun.created_at)
                 )
@@ -154,6 +160,9 @@ async def _load_rows(channel: str, since: datetime, until: datetime) -> list[Pil
 
 
 def grade_rows(rows: list[PilotRow]) -> dict[str, Any]:
+    rows = [
+        row for row in rows if row.run.request_kind in {None, RequestKind.PAYMENT_IDENTIFICATION}
+    ]
     cases: list[dict[str, Any]] = []
     latencies: list[float] = []
     input_tokens: list[int] = []

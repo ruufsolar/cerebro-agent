@@ -5,6 +5,7 @@ import base64
 import logging
 import os
 from dataclasses import dataclass, field
+from enum import StrEnum
 from time import monotonic
 from typing import Any, cast
 from urllib.parse import quote
@@ -44,18 +45,27 @@ from cerebro.agent.models import (
     EvidenceKind,
     EvidencePolarity,
     EvidenceSignal,
+    GeneralAnswer,
     IdentificationOutcome,
     PaymentIdentification,
+    RequestKind,
     ToolAuditRecord,
     UnverifiedField,
 )
-from cerebro.agent.prompt import TRANSCRIPT_LIMIT, load_prompt
+from cerebro.agent.prompt import (
+    TRANSCRIPT_LIMIT,
+    load_general_prompt,
+    load_prompt,
+    load_router_prompt,
+)
 from cerebro.agent.runner import (
     AgentRunFailure,
     AgentRunInput,
     AgentRunner,
     AgentRunResult,
     FakeAgentRunner,
+    GeneralAgentRunResult,
+    RunnerResult,
 )
 from cerebro.config import AppConfig, get_config
 from cerebro.observability import log_event
@@ -81,6 +91,17 @@ class ModelIdentification(BaseModel):
     recommended_customer: ModelCandidate | None = None
     unable_to_verify: list[UnverifiedField] = Field(default_factory=list, max_length=5)
     alternatives: list[ModelCandidate] = Field(default_factory=list, max_length=3)
+
+
+class RouteCertainty(StrEnum):
+    CERTAIN = "certain"
+    UNCERTAIN = "uncertain"
+
+
+class ModelRoute(BaseModel):
+    request_kind: RequestKind
+    certainty: RouteCertainty
+    potentially_adversarial: bool = False
 
 
 class ToolBudgetExceeded(RuntimeError):
@@ -308,23 +329,26 @@ class OpenAIAgentsRunner:
     async def start(self) -> None:
         await self.data.start()
 
-    def _model(self) -> OpenAIResponsesModel | OpenAIChatCompletionsModel:
+    def _model(
+        self, deployment: str | None = None
+    ) -> OpenAIResponsesModel | OpenAIChatCompletionsModel:
+        model = deployment or self.config.azure_deployment_main
         if self.config.azure_openai_use_responses:
             return OpenAIResponsesModel(
-                model=self.config.azure_deployment_main,
+                model=model,
                 openai_client=self.client,
             )
         return OpenAIChatCompletionsModel(
-            model=self.config.azure_deployment_main,
+            model=model,
             openai_client=self.client,
         )
 
-    def _tools(self, state: RunState) -> list[Any]:
+    def _generic_tools(self, state: RunState) -> list[Any]:
         data = self.data
 
         @function_tool(failure_error_function=None)
         async def read_finops_knowledge(request: KnowledgeQuery) -> str:
-            """Lee política, alcance o limitaciones aprobadas para identificar pagos."""
+            """Lee política, alcance o limitaciones aprobadas de FinOps."""
             return await state.invoke("read_finops_knowledge", request, data.read_finops_knowledge)
 
         @function_tool(failure_error_function=None)
@@ -333,6 +357,18 @@ class OpenAIAgentsRunner:
             return await state.invoke(
                 "describe_database_tables", request, data.describe_database_tables
             )
+
+        @function_tool(failure_error_function=None)
+        async def run_readonly_sql(request: ReadonlySqlQuery) -> str:
+            """Ejecuta SELECT PostgreSQL acotado por AST, relaciones, funciones, filas y tiempo."""
+            return await state.invoke("run_readonly_sql", request, data.run_readonly_sql)
+
+        return [read_finops_knowledge, describe_database_tables, run_readonly_sql]
+
+    def _payment_tools(self, state: RunState) -> list[Any]:
+        data = self.data
+
+        tools = self._generic_tools(state)
 
         @function_tool(failure_error_function=None)
         async def search_payment_candidates(request: PaymentCandidateQuery) -> str:
@@ -353,18 +389,11 @@ class OpenAIAgentsRunner:
             """Busca texto de Vambe acotado a una orden o teléfono; nunca hace un escaneo global."""
             return await state.invoke("search_vambe_messages", request, data.search_vambe_messages)
 
-        @function_tool(failure_error_function=None)
-        async def run_readonly_sql(request: ReadonlySqlQuery) -> str:
-            """Ejecuta SELECT PostgreSQL acotado por AST, relaciones, funciones, filas y tiempo."""
-            return await state.invoke("run_readonly_sql", request, data.run_readonly_sql)
-
         return [
-            read_finops_knowledge,
-            describe_database_tables,
+            *tools,
             search_payment_candidates,
             verify_payment_candidate,
             search_vambe_messages,
-            run_readonly_sql,
         ]
 
     @staticmethod
@@ -591,12 +620,10 @@ class OpenAIAgentsRunner:
 
     def _map_output(self, output: ModelIdentification, state: RunState) -> PaymentIdentification:
         if output.outcome is IdentificationOutcome.OUT_OF_SCOPE:
-            return PaymentIdentification(
-                outcome=IdentificationOutcome.OUT_OF_SCOPE,
-                confidence=Confidence.UNKNOWN,
-                investigation_summary=(
-                    "Por ahora Cerebro sólo identifica pagos entrantes para FinOps."
-                ),
+            return self._ambiguous(
+                output,
+                state,
+                summary="El flujo de pagos no recibió evidencia suficiente para identificar.",
             )
         if output.outcome is IdentificationOutcome.NO_CUSTOMER_FOUND:
             if (
@@ -691,104 +718,343 @@ class OpenAIAgentsRunner:
             evidence=grounded,
         )
 
-    async def run(self, run_input: AgentRunInput) -> AgentRunResult:
-        instructions, prompt_version, knowledge_version = load_prompt(self.config)
-        state = RunState(max_tool_calls=self.config.max_tool_calls)
+    def _settings(self, *, reasoning_effort: str, max_tokens: int) -> ModelSettings:
         settings_kwargs: dict[str, Any] = {
             "parallel_tool_calls": False,
-            "max_tokens": self.config.azure_max_output_tokens,
+            "max_tokens": max_tokens,
             "timeout": float(self.config.agent_timeout_seconds),
         }
         if self.config.azure_openai_use_responses:
             settings_kwargs.update(
-                reasoning={"effort": self.config.azure_reasoning_effort, "summary": "auto"},
+                reasoning={"effort": reasoning_effort, "summary": "auto"},
                 store=False,
             )
+        return ModelSettings(**settings_kwargs)
+
+    @staticmethod
+    def _run_config(workflow_name: str) -> RunConfig:
+        return RunConfig(
+            tracing_disabled=True,
+            trace_include_sensitive_data=False,
+            workflow_name=workflow_name,
+        )
+
+    @staticmethod
+    def _usage(sdk_result: Any, *, model: str, tool_calls: int = 0) -> AgentUsage:
+        usage = sdk_result.context_wrapper.usage
+        return AgentUsage(
+            model=model,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            turns=usage.requests,
+            tool_calls=tool_calls,
+        )
+
+    @staticmethod
+    def _combined_usage(router: AgentUsage, specialist: AgentUsage) -> AgentUsage:
+        def total(left: int | None, right: int | None) -> int | None:
+            if left is None and right is None:
+                return None
+            return (left or 0) + (right or 0)
+
+        return AgentUsage(
+            model=specialist.model,
+            input_tokens=total(router.input_tokens, specialist.input_tokens),
+            output_tokens=total(router.output_tokens, specialist.output_tokens),
+            turns=router.turns + specialist.turns,
+            tool_calls=specialist.tool_calls,
+        )
+
+    async def _route(
+        self, items: list[dict[str, Any]]
+    ) -> tuple[RequestKind, AgentUsage, AgentStep]:
+        instructions, prompt_version = load_router_prompt()
         agent: Agent[None] = Agent(
-            name="Cerebro",
+            name="Cerebro Router",
             instructions=instructions,
-            model=self._model(),
-            model_settings=ModelSettings(**settings_kwargs),
-            output_type=ModelIdentification,
-            tools=self._tools(state),
+            model=self._model(self.config.azure_deployment_small),
+            model_settings=self._settings(
+                reasoning_effort=self.config.router_reasoning_effort,
+                max_tokens=256,
+            ),
+            output_type=ModelRoute,
+            tools=[],
         )
         try:
-            async with asyncio.timeout(self.config.agent_timeout_seconds):
-                sdk_result = await Runner.run(
-                    agent,
-                    cast(Any, build_input_items(run_input)),
-                    max_turns=self.config.max_agent_turns,
-                    run_config=RunConfig(
-                        tracing_disabled=True,
-                        trace_include_sensitive_data=False,
-                        workflow_name="Cerebro payment identification",
-                    ),
-                )
-        except (TimeoutError, ModelTimeoutError):
-            result = _unknown(
+            sdk_result = await Runner.run(
+                agent,
+                cast(Any, items),
+                max_turns=1,
+                run_config=self._run_config("Cerebro request routing"),
+            )
+            route = sdk_result.final_output_as(ModelRoute, raise_if_incorrect_type=True)
+        except (MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError, ModelTimeoutError):
+            return (
+                RequestKind.PAYMENT_IDENTIFICATION,
+                AgentUsage(model=self.config.azure_deployment_small),
+                AgentStep(
+                    type="request_classified",
+                    name=RequestKind.PAYMENT_IDENTIFICATION,
+                    status=RouteCertainty.UNCERTAIN,
+                    model=self.config.azure_deployment_small,
+                    prompt_version=prompt_version,
+                ),
+            )
+        except (TypeError, ValueError):
+            return (
+                RequestKind.PAYMENT_IDENTIFICATION,
+                AgentUsage(model=self.config.azure_deployment_small),
+                AgentStep(
+                    type="request_classified",
+                    name=RequestKind.PAYMENT_IDENTIFICATION,
+                    status=RouteCertainty.UNCERTAIN,
+                    model=self.config.azure_deployment_small,
+                    prompt_version=prompt_version,
+                ),
+            )
+        request_kind = (
+            RequestKind.PAYMENT_IDENTIFICATION
+            if route.potentially_adversarial or route.certainty is RouteCertainty.UNCERTAIN
+            else route.request_kind
+        )
+        return (
+            request_kind,
+            self._usage(sdk_result, model=self.config.azure_deployment_small),
+            AgentStep(
+                type="request_classified",
+                name=request_kind,
+                status=(
+                    "potentially_adversarial" if route.potentially_adversarial else route.certainty
+                ),
+                model=self.config.azure_deployment_small,
+                prompt_version=prompt_version,
+            ),
+        )
+
+    async def _run_payment(
+        self,
+        items: list[dict[str, Any]],
+        state: RunState,
+        instructions: str,
+    ) -> AgentRunResult:
+        agent: Agent[None] = Agent(
+            name="Cerebro Payment Investigator",
+            instructions=instructions,
+            model=self._model(),
+            model_settings=self._settings(
+                reasoning_effort=self.config.azure_reasoning_effort,
+                max_tokens=self.config.azure_max_output_tokens,
+            ),
+            output_type=ModelIdentification,
+            tools=self._payment_tools(state),
+        )
+        try:
+            sdk_result = await Runner.run(
+                agent,
+                cast(Any, items),
+                max_turns=self.config.max_agent_turns,
+                run_config=self._run_config("Cerebro payment identification"),
+            )
+        except ModelTimeoutError:
+            return _unknown(
                 "La investigación excedió el tiempo permitido.", CompletionReason.TIMEOUT
             )
         except MaxTurnsExceeded:
-            result = _unknown(
+            return _unknown(
                 "La investigación agotó el límite de turnos.", CompletionReason.TURN_LIMIT
             )
         except ToolBudgetExceeded:
-            result = _unknown(
+            return _unknown(
                 "La investigación agotó el límite de herramientas.",
                 CompletionReason.TOOL_LIMIT,
             )
         except ModelRefusalError:
-            result = _unknown(
-                "El modelo no pudo responder esta solicitud.", CompletionReason.REFUSAL
-            )
+            return _unknown("El modelo no pudo responder esta solicitud.", CompletionReason.REFUSAL)
         except ModelBehaviorError:
-            result = _unknown(
+            return _unknown(
                 "El modelo no produjo una respuesta estructurada válida.",
                 CompletionReason.INVALID_OUTPUT,
             )
+        try:
+            output = sdk_result.final_output_as(ModelIdentification, raise_if_incorrect_type=True)
+        except (TypeError, ValueError):
+            return _unknown(
+                "El modelo no produjo una respuesta estructurada válida.",
+                CompletionReason.INVALID_OUTPUT,
+            )
+        return AgentRunResult(
+            identification=self._map_output(output, state),
+            steps=tuple(AgentStep(type="model_response") for _ in sdk_result.raw_responses),
+            usage=self._usage(
+                sdk_result,
+                model=self.config.azure_deployment_main,
+                tool_calls=len(state.calls),
+            ),
+            completion_reason=CompletionReason.COMPLETED,
+        )
+
+    async def _run_general(
+        self,
+        items: list[dict[str, Any]],
+        state: RunState,
+        instructions: str,
+    ) -> GeneralAgentRunResult:
+        agent: Agent[None] = Agent(
+            name="Cerebro",
+            instructions=instructions,
+            model=self._model(),
+            model_settings=self._settings(
+                reasoning_effort=self.config.azure_reasoning_effort,
+                max_tokens=min(self.config.azure_max_output_tokens, 1_024),
+            ),
+            output_type=GeneralAnswer,
+            tools=self._generic_tools(state),
+        )
+        fallback: tuple[str, CompletionReason] | None = None
+        sdk_result: Any | None = None
+        try:
+            sdk_result = await Runner.run(
+                agent,
+                cast(Any, items),
+                max_turns=self.config.max_agent_turns,
+                run_config=self._run_config("Cerebro general conversation"),
+            )
+        except ModelTimeoutError:
+            fallback = (
+                "Se agotó el tiempo antes de que pudiera cerrar la respuesta.",
+                CompletionReason.TIMEOUT,
+            )
+        except MaxTurnsExceeded:
+            fallback = (
+                "Pensé demasiado y agoté mis turnos. Intenta una pregunta más acotada.",
+                CompletionReason.TURN_LIMIT,
+            )
+        except ToolBudgetExceeded:
+            fallback = (
+                "La consulta agotó el límite de herramientas. Habrá que acotar la ambición.",
+                CompletionReason.TOOL_LIMIT,
+            )
+        except ModelRefusalError:
+            fallback = (
+                "No puedo responder esa solicitud.",
+                CompletionReason.REFUSAL,
+            )
+        except ModelBehaviorError:
+            fallback = (
+                "No pude construir una respuesta válida. Incluso mi cerebro tiene días difíciles.",
+                CompletionReason.INVALID_OUTPUT,
+            )
+        if fallback is not None:
+            answer, reason = fallback
+            return GeneralAgentRunResult(
+                response=GeneralAnswer(answer=answer),
+                usage=AgentUsage(
+                    model=self.config.azure_deployment_main,
+                    tool_calls=len(state.calls),
+                ),
+                completion_reason=reason,
+            )
+        assert sdk_result is not None
+        try:
+            output = sdk_result.final_output_as(GeneralAnswer, raise_if_incorrect_type=True)
+        except (TypeError, ValueError):
+            return GeneralAgentRunResult(
+                response=GeneralAnswer(
+                    answer=(
+                        "No pude construir una respuesta válida. "
+                        "Incluso mi cerebro tiene días difíciles."
+                    )
+                ),
+                usage=AgentUsage(
+                    model=self.config.azure_deployment_main,
+                    tool_calls=len(state.calls),
+                ),
+                completion_reason=CompletionReason.INVALID_OUTPUT,
+            )
+        return GeneralAgentRunResult(
+            response=output,
+            steps=tuple(AgentStep(type="model_response") for _ in sdk_result.raw_responses),
+            usage=self._usage(
+                sdk_result,
+                model=self.config.azure_deployment_main,
+                tool_calls=len(state.calls),
+            ),
+            completion_reason=CompletionReason.COMPLETED,
+        )
+
+    async def run(self, run_input: AgentRunInput) -> RunnerResult:
+        payment_instructions, payment_version, payment_knowledge = load_prompt(self.config)
+        general_instructions, general_version, general_knowledge = load_general_prompt(self.config)
+        items = build_input_items(run_input)
+        state = RunState(max_tool_calls=self.config.max_tool_calls)
+        request_kind = RequestKind.PAYMENT_IDENTIFICATION
+        router_usage = AgentUsage(model=self.config.azure_deployment_small)
+        route_step = AgentStep(
+            type="request_classified",
+            name=request_kind,
+            status=RouteCertainty.UNCERTAIN,
+            model=self.config.azure_deployment_small,
+            prompt_version=load_router_prompt()[1],
+        )
+        try:
+            async with asyncio.timeout(self.config.agent_timeout_seconds):
+                request_kind, router_usage, route_step = await self._route(items)
+                if request_kind is RequestKind.GENERAL:
+                    result: RunnerResult = await self._run_general(
+                        items, state, general_instructions
+                    )
+                else:
+                    result = await self._run_payment(items, state, payment_instructions)
+        except TimeoutError:
+            if request_kind is RequestKind.GENERAL:
+                result = GeneralAgentRunResult(
+                    response=GeneralAnswer(
+                        answer="Se agotó el tiempo antes de que pudiera cerrar la respuesta."
+                    ),
+                    completion_reason=CompletionReason.TIMEOUT,
+                )
+            else:
+                result = _unknown(
+                    "La investigación excedió el tiempo permitido.", CompletionReason.TIMEOUT
+                )
         except Exception as exc:
+            prompt_version = (
+                general_version if request_kind is RequestKind.GENERAL else payment_version
+            )
+            knowledge_version = (
+                general_knowledge if request_kind is RequestKind.GENERAL else payment_knowledge
+            )
             raise AgentRunFailure(
                 f"agent provider/runtime failure: {type(exc).__name__}",
                 tool_calls=tuple(state.calls),
                 prompt_version=prompt_version,
                 knowledge_version=knowledge_version,
+                request_kind=request_kind,
             ) from exc
-        else:
-            try:
-                output = sdk_result.final_output_as(
-                    ModelIdentification, raise_if_incorrect_type=True
-                )
-            except (TypeError, ValueError):
-                result = _unknown(
-                    "El modelo no produjo una respuesta estructurada válida.",
-                    CompletionReason.INVALID_OUTPUT,
-                )
-            else:
-                usage = sdk_result.context_wrapper.usage
-                result = AgentRunResult(
-                    identification=self._map_output(output, state),
-                    steps=tuple(AgentStep(type="model_response") for _ in sdk_result.raw_responses),
-                    usage=AgentUsage(
-                        model=self.config.azure_deployment_main,
-                        input_tokens=usage.input_tokens,
-                        output_tokens=usage.output_tokens,
-                        turns=usage.requests,
-                        tool_calls=len(state.calls),
-                    ),
-                    completion_reason=CompletionReason.COMPLETED,
-                )
+        specialist_usage = result.usage.model_copy(
+            update={
+                "model": result.usage.model or self.config.azure_deployment_main,
+                "tool_calls": len(state.calls),
+            }
+        )
+        usage = self._combined_usage(router_usage, specialist_usage)
+        steps = (route_step, *result.steps)
+        if isinstance(result, GeneralAgentRunResult):
+            return GeneralAgentRunResult(
+                response=result.response,
+                steps=steps,
+                usage=usage,
+                prompt_version=general_version,
+                knowledge_version=general_knowledge,
+                completion_reason=result.completion_reason,
+                tool_calls=tuple(state.calls),
+            )
         return AgentRunResult(
             identification=result.identification,
-            steps=result.steps,
-            usage=AgentUsage(
-                model=result.usage.model or self.config.azure_deployment_main,
-                input_tokens=result.usage.input_tokens,
-                output_tokens=result.usage.output_tokens,
-                turns=result.usage.turns,
-                tool_calls=len(state.calls),
-            ),
-            prompt_version=prompt_version,
-            knowledge_version=knowledge_version,
+            steps=steps,
+            usage=usage,
+            prompt_version=payment_version,
+            knowledge_version=payment_knowledge,
             completion_reason=result.completion_reason,
             tool_calls=tuple(state.calls),
         )
@@ -804,6 +1070,8 @@ def build_agent_runner(config: AppConfig | None = None) -> AgentRunner:
         return FakeAgentRunner()
     if not config.azure_deployment_main:
         raise ValueError("CEREBRO_AZURE_DEPLOYMENT_MAIN is required for the Azure agent")
+    if not config.azure_deployment_small:
+        raise ValueError("CEREBRO_AZURE_DEPLOYMENT_SMALL is required for request routing")
     data: InvestigationData = EmptyInvestigationData()
     if config.replica_ready:
         knowledge = load_knowledge(config.knowledge_dir)

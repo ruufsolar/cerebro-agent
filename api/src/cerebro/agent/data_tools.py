@@ -65,7 +65,12 @@ class ToolObservation(BaseModel):
 
 
 class KnowledgeQuery(BaseModel):
-    topic: Literal["identification_policy", "data_scope", "limitations"]
+    topic: Literal[
+        "general_capabilities",
+        "identification_policy",
+        "data_scope",
+        "limitations",
+    ]
 
 
 class SchemaQuery(BaseModel):

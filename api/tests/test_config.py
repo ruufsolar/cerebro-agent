@@ -13,6 +13,9 @@ def test_config_is_safe_by_default() -> None:
     assert config.azure_agent_partially_configured is False
     assert config.slack_ready is False
     assert config.azure_deployment_main == "gpt-5-6-luna"
+    assert config.azure_deployment_small == "gpt-5-6-luna"
+    assert config.router_reasoning_effort == "low"
+    assert config.general_max_words == 180
     assert config.readiness_profile is ReadinessProfile.FOUNDATION
     assert config.worker_concurrency == 2
     assert config.runtime_heartbeat_seconds == 15
@@ -49,6 +52,21 @@ def test_pilot_configuration_rejects_an_empty_azure_deployment() -> None:
         read_replica_url="postgresql://readonly@replica.invalid/monolith?sslmode=require",
     )
 
+    assert config.live_agent_ready is False
+    assert config.pilot_configuration_ready is False
+
+
+def test_pilot_configuration_rejects_an_empty_router_deployment() -> None:
+    config = AppConfig(
+        slack_app_token="xapp-test",
+        slack_bot_token="xoxb-test",
+        azure_openai_endpoint="https://example.test",
+        azure_openai_api_key="secret",
+        azure_deployment_small="",
+        read_replica_url="postgresql://readonly@replica.invalid/monolith?sslmode=require",
+    )
+
+    assert config.azure_agent_ready is False
     assert config.live_agent_ready is False
     assert config.pilot_configuration_ready is False
 

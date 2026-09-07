@@ -4,9 +4,10 @@ The Slack surface uses Socket Mode: Cerebro opens an outbound WebSocket to Slack
 need a public URL, port forwarding, ngrok, or Tailscale. Tailscale will become relevant only
 if a later slice reaches a private replica/network endpoint from your laptop.
 
-With Azure credentials and a verified replica DSN, Slice 5 can investigate text and static
-PNG/JPEG/WebP screenshots. Without the replica, tools explicitly report unavailable. Without
-Azure, the deterministic fake runs and intentionally does not download screenshots.
+With Azure credentials and a verified replica DSN, Cerebro can route payment investigations and
+general FinOps conversation from text or static PNG/JPEG/WebP screenshots. Without the replica,
+tools explicitly report unavailable. Without Azure, the deterministic payment fake runs and
+intentionally does not download screenshots.
 
 ## Before starting
 
@@ -40,6 +41,8 @@ reasoning, set both Azure endpoint and API key; setting only one makes the worke
 To test real data, also set the dedicated `CEREBRO_READ_REPLICA_URL`. Production/staging
 must point to a physical replica using SSL; never substitute the primary DSN.
 Set `CEREBRO_AZURE_DEPLOYMENT_MAIN` to the Azure deployment serving GPT-5.6 Luna.
+Set `CEREBRO_AZURE_DEPLOYMENT_SMALL` to the approved routing deployment; it may currently name the
+same Luna deployment. Leaving either deployment empty fails pilot readiness.
 
 ## Start Cerebro
 
@@ -68,24 +71,27 @@ should show no failed jobs.
 
 ## Acceptance script
 
-1. Mention `@cerebro` in the invited channel with a Spanish payment-identification question.
+1. Mention `@cerebro` in the invited private channel with a Spanish
+   payment-identification question.
    You may attach a PNG/JPEG screenshot.
 2. Confirm Cerebro shows native thread status and posts exactly one reply in that thread.
 3. Without a replica, confirm it reports unavailable sources and returns `unknown`. With
    Azure + replica, confirm any recommendation links to a CRM order returned by the
-   verification tool and includes the compact Cerebro pilot banner.
+   verification tool. Confirm the reply begins with `Resultado` and contains no slice/pilot banner.
 4. Reply as a human in the same thread. Confirm a new investigation replies in that
    thread. A message in an unrelated thread must not trigger Cerebro.
-5. Add 🧀 to an investigation response. There should be no flavor reply.
-6. Add 🔌 to an investigation response. Cerebro should reply once with
+5. Start a separate thread with a clearly general question such as `@cerebro, ¿qué diferencia
+   hay entre conciliación y cobranza?`. Confirm the concise answer has no payment result fields.
+6. Add 🧀 to either a payment or general response. There should be no flavor reply.
+7. Add 🔌 to either response. Cerebro should reply once with
    `Arrrrgghhh ⚡️☠️` in the same thread. Adding 🔌 to that flavor reply must do nothing.
-7. Remove a supported reaction; its feedback row should become inactive.
-8. Inspect the database if needed. Stored file JSON must contain only bounded image
+8. Remove a supported reaction; its feedback row should become inactive.
+9. Inspect the database if needed. Stored file JSON must contain only bounded image
    metadata (`id`, `name`, `mimetype`, `size`) and categorical ingestion counts, never
    `url_private`, thumbnails, local paths, Base64, or bytes.
-9. Attach one valid image plus a PDF, GIF, HEIC, oversized, or corrupt image. The valid image
+10. Attach one valid image plus a PDF, GIF, HEIC, oversized, or corrupt image. The valid image
    should still be analyzed and the concise response must state how many were not processed.
-10. In the agent-worker container, confirm no run directories remain after both success and failure:
+11. In the agent-worker container, confirm no run directories remain after both success and failure:
 
    ```bash
    docker compose -f deploy/compose.local.yml --profile slack exec agent-worker \

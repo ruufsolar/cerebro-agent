@@ -3,7 +3,7 @@
 Cerebro produces structured data first. The application validates evidence, computes
 confidence, builds CRM links, and renders concise Spanish prose.
 
-## Outcomes
+## Payment outcomes
 
 - `matched`: exactly one verified customer with high or medium confidence. An eligible
   receivable is preferred but may be absent for a robust identity-only match; that absence must
@@ -11,7 +11,7 @@ confidence, builds CRM links, and renders concise Spanish prose.
 - `ambiguous`: no recommendation; up to three verified ranked alternatives may be useful.
 - `no_customer_found`: a conclusive available search found no eligible customer. This does
   not classify the movement as supplier, refund, or internal transfer.
-- `out_of_scope`: the request is not incoming-payment identification.
+- `out_of_scope`: retained only for backward compatibility with stored pre-router results.
 
 Technical exhaustion becomes `ambiguous` plus a completion reason. Provider/configuration
 failures remain failed runs.
@@ -36,3 +36,17 @@ Amount alone never produces a match. Weak/conflicting signals preserve uncertain
 
 Empty sections, repeated evidence, raw identifiers, and tool-by-tool narration are omitted.
 Partial image failures are folded into the missing-verification line.
+
+Payment replies have no slice, preview, or pilot banner and begin directly with `Resultado`.
+
+## General answers
+
+The router must classify a request as certainly `general` before it can reach this path. The
+specialist returns `{answer: string}` and the application preserves complete sentences within an
+approximately 180-word limit. It answers in Spanish unless the user clearly uses another
+language, leads with the answer, and may use at most one restrained Cerebro flourish. There is no
+payment outcome, confidence, candidate, evidence ID, or CRM link contract on this path.
+
+Current Ruuf/customer facts still require successful read tools. General answers may advise but
+must not claim a payment, hold, customer contact, or other write happened. Image failure counts are
+appended deterministically. Trailing ellipses and mid-sentence clipping are forbidden.
