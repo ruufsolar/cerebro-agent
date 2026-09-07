@@ -107,14 +107,14 @@ async def test_responses_default_and_chat_fallback_use_exact_deployment() -> Non
         AppConfig(
             azure_openai_endpoint="https://example.test",
             azure_openai_api_key="test",
-            azure_deployment_main="gpt-5-6-luna",
+            azure_deployment_main="gpt-5-6-sol",
         )
     )
     chat = OpenAIAgentsRunner(
         AppConfig(
             azure_openai_endpoint="https://example.test",
             azure_openai_api_key="test",
-            azure_deployment_main="gpt-5-6-luna",
+            azure_deployment_main="gpt-5-6-sol",
             azure_openai_use_responses=False,
         )
     )
@@ -123,8 +123,8 @@ async def test_responses_default_and_chat_fallback_use_exact_deployment() -> Non
         chat_model = chat._model()
         assert isinstance(responses_model, OpenAIResponsesModel)
         assert isinstance(chat_model, OpenAIChatCompletionsModel)
-        assert responses_model.model == "gpt-5-6-luna"
-        assert chat_model.model == "gpt-5-6-luna"
+        assert responses_model.model == "gpt-5-6-sol"
+        assert chat_model.model == "gpt-5-6-sol"
     finally:
         await responses.close()
         await chat.close()
@@ -780,7 +780,7 @@ async def test_success_records_usage_and_disables_sensitive_tracing(
         assert run_config.tracing_disabled is True
         assert run_config.trace_include_sensitive_data is False
     assert [item["max_turns"] for item in captured] == [1, 8]
-    assert result.usage.model == "gpt-5-6-luna"
+    assert result.usage.model == "gpt-5-6-sol"
     assert result.usage.input_tokens == 240
     assert result.usage.output_tokens == 60
     assert result.usage.turns == 4

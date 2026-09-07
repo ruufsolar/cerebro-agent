@@ -80,13 +80,15 @@ refusal, and invalid structured output are successful `unknown` investigations w
 runs. Use the error category and Azure request metadata, never prompt/customer content, for
 diagnosis.
 
-Slice 5 uses the Azure deployment named by `CEREBRO_AZURE_DEPLOYMENT_MAIN`, expected to serve
-GPT-5.6 Luna. Do not confuse the Azure deployment name with the OpenAI catalog model ID. If
-the deployment is missing, keep the capability off and ask the Azure owner for the correct
-Luna deployment; do not silently return to Sol.
+Production uses the Azure deployment named by `CEREBRO_AZURE_DEPLOYMENT_MAIN`, which serves
+GPT-5.6 Sol since 2026-09-07 (Slice 5 was gated on GPT-5.6 Luna). Do not confuse the Azure
+deployment name with the OpenAI catalog model ID. If the deployment is missing, keep the
+capability off and ask the Azure owner for the correct deployment; never substitute another
+model silently. A model change is a deliberate operator action: rerun the live twenty-case
+gate against the new deployment, then reseed `azure-deployment-main` and activate.
 
 Conversational routing uses `CEREBRO_AZURE_DEPLOYMENT_SMALL` with low reasoning and no tools. It
-may name the same Luna deployment initially. Missing either main or small deployment is a startup
+may name the same Sol deployment initially. Missing either main or small deployment is a startup
 and pilot-readiness failure.
 
 ## Screenshot unavailable or image cleanup alert

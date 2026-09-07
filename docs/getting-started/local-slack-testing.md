@@ -40,9 +40,9 @@ Azure and replica credentials can remain empty for Slack-shell testing. To test 
 reasoning, set both Azure endpoint and API key; setting only one makes the worker fail fast.
 To test real data, also set the dedicated `CEREBRO_READ_REPLICA_URL`. Production/staging
 must point to a physical replica using SSL; never substitute the primary DSN.
-Set `CEREBRO_AZURE_DEPLOYMENT_MAIN` to the Azure deployment serving GPT-5.6 Luna.
+Set `CEREBRO_AZURE_DEPLOYMENT_MAIN` to the Azure deployment serving GPT-5.6 Sol.
 Set `CEREBRO_AZURE_DEPLOYMENT_SMALL` to the approved routing deployment; it may currently name the
-same Luna deployment. Leaving either deployment empty fails pilot readiness.
+same Sol deployment. Leaving either deployment empty fails pilot readiness.
 
 ## Start Cerebro
 

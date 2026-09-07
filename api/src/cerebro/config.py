@@ -45,8 +45,8 @@ class AppConfig(BaseSettings):
     azure_openai_endpoint: str = ""
     azure_openai_api_key: str = ""
     # These are Azure deployment names, not necessarily catalog model identifiers.
-    azure_deployment_main: str = "gpt-5-6-luna"
-    azure_deployment_small: str = "gpt-5-6-luna"
+    azure_deployment_main: str = "gpt-5-6-sol"
+    azure_deployment_small: str = "gpt-5-6-sol"
     azure_openai_use_responses: bool = True
     azure_reasoning_effort: str = "medium"
     router_reasoning_effort: str = "low"

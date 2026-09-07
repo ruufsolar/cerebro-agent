@@ -57,7 +57,7 @@ uv run python -m cerebro.evals.run --live --json-output /tmp/cerebro-eval.json
 uv run python -m cerebro.evals.run --live --case third_party_with_vambe
 ```
 
-The live command runs each case once with the configured Luna deployment. Screenshot cases
+The live command runs each case once with the configured main deployment. Screenshot cases
 generate temporary fake bank images. It requires approved Azure credentials but never
 connects to Slack, the replica, or real customer data. Passing requires at least 17/20
 correct decisions, zero wrong high-confidence matches, zero unsupported evidence/customer
