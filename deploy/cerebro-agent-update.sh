@@ -24,20 +24,47 @@ DRAIN_TIMEOUT_S=240
 HEALTH_TIMEOUT_S=120
 FORCE_DEPLOY=${CEREBRO_FORCE_DEPLOY:-0}
 
-before=$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || echo none)
+# docker image inspect can print a blank line before failing on a missing image, so strip
+# whitespace and treat empty as absent rather than trusting its exit status alone.
+image_id() {
+  docker image inspect "$1" --format '{{.Id}}' 2>/dev/null | tr -d '[:space:]' || true
+}
+before=$(image_id "$IMAGE")
+before=${before:-none}
 "${COMPOSE[@]}" pull --quiet || echo "cerebro-agent: pull failed; keeping local images"
-after=$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || echo none)
+after=$(image_id "$IMAGE")
+after=${after:-none}
 
 if [ "$before" == "$after" ] && [ "$after" != "none" ] && [ "$FORCE_DEPLOY" != "1" ] \
   && curl -fsS --max-time 3 http://127.0.0.1:8010/ready >/dev/null 2>&1; then
   exit 0
 fi
 
+# Count only in-flight jobs that a live worker is actually running. A job whose worker
+# died without finishing it (worker_id null, or a heartbeat older than the worker's own
+# stall timeout) is orphaned: nothing will ever complete it, so waiting on it would block
+# every deploy until someone fixed the row by hand. Workers heartbeat every 10s.
 running_jobs() {
-  "${COMPOSE[@]}" exec -T db psql -U cerebro -d cerebro -tA \
-    -c "SELECT count(*) FROM procrastinate_jobs WHERE status = 'doing'" 2>/dev/null \
+  "${COMPOSE[@]}" exec -T db psql -U cerebro -d cerebro -tA -c "
+    SELECT count(*) FROM procrastinate_jobs j
+      JOIN procrastinate_workers w ON w.id = j.worker_id
+     WHERE j.status = 'doing' AND w.last_heartbeat > now() - interval '60 seconds'" 2>/dev/null \
     | tr -d '[:space:]' || echo 0
 }
+
+orphaned_jobs() {
+  "${COMPOSE[@]}" exec -T db psql -U cerebro -d cerebro -tA -c "
+    SELECT count(*) FROM procrastinate_jobs j
+      LEFT JOIN procrastinate_workers w ON w.id = j.worker_id
+     WHERE j.status = 'doing'
+       AND (w.id IS NULL OR w.last_heartbeat <= now() - interval '60 seconds')" 2>/dev/null \
+    | tr -d '[:space:]' || echo 0
+}
+
+orphans=$(orphaned_jobs)
+if [ -n "$orphans" ] && [ "$orphans" != "0" ]; then
+  echo "cerebro-agent: ignoring $orphans orphaned job(s) left in 'doing' by a dead worker" >&2
+fi
 
 # Stop new Slack ingestion first. Existing control/agent workers stay alive while the
 # already-accepted work drains, so the update never deliberately cancels an investigation.
@@ -72,8 +99,11 @@ if [ -n "$busy" ] && [ "$busy" != "0" ]; then
   exit 1
 fi
 
-if [ "$before" != "none" ]; then
-  docker tag "$before" "$ROLLBACK_TAG"
+# last-good must be the image production is running now, not an earlier local copy of the
+# tag being deployed; on a normal deploy of a new tag the latter does not exist yet.
+running=$(docker inspect --format '{{.Image}}' cerebro-agent-web-1 2>/dev/null | tr -d '[:space:]' || true)
+if [ -n "$running" ]; then
+  docker tag "$running" "$ROLLBACK_TAG"
 fi
 
 "${COMPOSE[@]}" up -d --remove-orphans

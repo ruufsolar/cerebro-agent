@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import signal
 from typing import Any
 
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
@@ -56,8 +57,17 @@ async def main() -> None:
     config = get_config()
     configure_logging("slack", config)
     handler = AsyncSocketModeHandler(build_slack_app(), config.slack_app_token)
+    # This process is PID 1 in its container, so without an explicit handler SIGTERM is
+    # ignored and every stop waits out the full grace period before Docker kills it.
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for signum in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(signum, stop.set)
     async with job_app.open_async(), maintain_heartbeat(RuntimeComponent.SLACK, config):
-        await handler.start_async()
+        await handler.connect_async()
+        await stop.wait()
+        log_event(logger, "slack_shutdown_requested")
+        await handler.close_async()
 
 
 if __name__ == "__main__":

@@ -198,7 +198,10 @@ command. Re-running creates new Key Vault secret versions and is safe.
 ./scripts/activate.sh
 ```
 
-Activation uses Azure Run Command, not SSH. On the VM it:
+Activation uses Azure Run Command, not SSH. It first runs `scripts/sync-deploy-files.sh`,
+which installs this checkout's `deploy/` files and bootstrap templates on the VM, because
+cloud-init delivers them only when the VM is created and `custom_data` cannot change
+afterwards. Then, on the VM, it:
 
 1. waits for and mounts the durable disk;
 2. retrieves secrets with the VM managed identity;
@@ -250,7 +253,13 @@ in a ticket.
   `scripts/activate-remote.sh` payload on the VM through Run Command, then the pilot
   preflight. If activation or preflight fails it restores the previous tag and re-activates.
   The manual equivalent is to seed the immutable SHA as `--image-tag` and run `activate.sh`.
-  The VM's five-minute timer follows whichever tag is configured.
+  The VM's five-minute timer follows whichever tag is configured. The drain waits only for
+  jobs that a live worker is running; a job left in `doing` by a worker that died is
+  reported and ignored rather than blocking every deploy.
+- **Change a deployment script:** edit it under `deploy/` or `templates/` and deploy as
+  usual; the sync step ships it. Terraform still embeds these files in `custom_data`, so
+  `terraform plan` will propose replacing the VM. Do not apply that for a script change
+  alone; the VM already runs the synced copy. Apply it only when a replacement is wanted.
 - **Rollback:** run `deploy.yml` from the Actions tab with `image_tag` set to the previous
   SHA. Locally, seed `--image-tag last-good` only after confirming the local tag exists,
   activate, and confirm `/ready`; then restore a reviewed immutable SHA.
