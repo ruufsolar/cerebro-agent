@@ -10,14 +10,16 @@ Reads approved runtime values without sourcing the env file and uploads them to 
 The Cerebro database password is reused from the vault on reseed; export CEREBRO_DB_PASSWORD
 only for a deliberate database password rotation, which also requires an ALTER ROLE on the VM.
 The VM pulls images with its managed identity, so no registry credential is seeded.
-Production mode defaults to "off" and must be changed explicitly.
+--mode and --image-tag likewise default to the vault's current values, so a reseed to rotate
+a credential never changes what production runs. On the first seed they default to "off"
+and "main". Pass them explicitly to change mode or deploy a different image.
 EOF
 }
 
 VAULT_NAME=
 ENV_FILE=
-GLOBAL_MODE=off
-IMAGE_TAG=main
+GLOBAL_MODE=""
+IMAGE_TAG=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -35,6 +37,23 @@ if [ -z "$VAULT_NAME" ] || [ -z "$ENV_FILE" ]; then
   exit 2
 fi
 [ -r "$ENV_FILE" ] || { echo "env file is not readable" >&2; exit 2; }
+command -v az >/dev/null || { echo "Azure CLI is required" >&2; exit 2; }
+az account show --output none 2>/dev/null || { echo "Run 'az login' first" >&2; exit 2; }
+
+# A reseed must not change what production runs. Reuse the vault's current mode and image
+# tag unless the operator passes them; only a first seed falls back to the safe defaults.
+vault_value() {
+  az keyvault secret show --vault-name "$VAULT_NAME" --name "$1" \
+    --query value --output tsv 2>/dev/null | tr -d '\r\n' || true
+}
+if [ -z "$GLOBAL_MODE" ]; then
+  GLOBAL_MODE=$(vault_value global-mode)
+  [ -n "$GLOBAL_MODE" ] || GLOBAL_MODE=off
+fi
+if [ -z "$IMAGE_TAG" ]; then
+  IMAGE_TAG=$(vault_value image-tag)
+  [ -n "$IMAGE_TAG" ] || IMAGE_TAG=main
+fi
 [[ "$GLOBAL_MODE" =~ ^(off|shadow|review|apply)$ ]] || {
   echo "mode must be off, shadow, review, or apply" >&2
   exit 2
