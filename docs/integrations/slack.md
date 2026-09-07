@@ -27,6 +27,8 @@ requires an app-level `connections:write` token created outside the manifest.
 - Use Slack envelope `event_id` as ingestion idempotency identity.
 - Ignore bot/subtype loops and messages outside known Cerebro threads.
 - Resolve `thread_ts` to root `ts` when the mention starts a thread.
+- Strip the bot-routing mention from stored/model transcript text; Slack still displays the
+  human's original root message as normal thread context.
 - Acknowledge first; perform slow work in a durable job.
 - Store only bounded image metadata (`id`, `name`, `mimetype`, `size`) and categorical counts.
   Resolve the triggering message's accepted file IDs through `files.info`; never retain
@@ -50,6 +52,8 @@ requires an app-level `connections:write` token created outside the manifest.
 Only investigation outputs accept feedback. 🧀 records positive feedback. 🔌 records
 negative feedback and creates one idempotent same-thread `Arrrrgghhh ⚡️☠️`; flavor and
 error outputs cannot recursively trigger it. Reaction removal deactivates an existing row.
+The reaction must be placed on Cerebro's investigation reply, not the human root message. Safe
+logs distinguish an unknown-output reaction from recorded feedback without logging message text.
 
 See [local Slack testing](../getting-started/local-slack-testing.md). Socket Mode is outbound,
 so this slice does not need Tailscale or an inbound tunnel.

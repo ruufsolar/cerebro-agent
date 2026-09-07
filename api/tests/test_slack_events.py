@@ -31,6 +31,7 @@ def test_root_mention_accepts_public_and_private_channels(channel_type: str) -> 
 
     assert result.kind is SlackEventKind.MENTION
     assert result.payload["thread_ts"] == "100.2"
+    assert result.payload["text"] == "identifica esto"
 
 
 def test_mention_inside_thread_keeps_root_thread() -> None:
@@ -50,6 +51,24 @@ def test_mention_inside_thread_keeps_root_thread() -> None:
 
     assert result.kind is SlackEventKind.MENTION
     assert result.payload["thread_ts"] == "100.1"
+    assert result.payload["text"] == "más contexto"
+
+
+def test_root_mention_is_removed_even_when_bolt_context_has_no_bot_id() -> None:
+    result = normalize_event(
+        envelope(
+            "app_mention",
+            channel="C1",
+            channel_type="channel",
+            ts="100.2",
+            user="U1",
+            text="<@U0BTT28LN6R> recibimos una transferencia",
+        ),
+        bot_user_id=None,
+        config=AppConfig(),
+    )
+
+    assert result.payload["text"] == "recibimos una transferencia"
 
 
 def test_human_thread_followup_is_accepted() -> None:

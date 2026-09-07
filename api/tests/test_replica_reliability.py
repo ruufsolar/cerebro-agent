@@ -73,9 +73,10 @@ async def test_replica_serialization_conflict_retries_with_fresh_transactions(
 
 
 class _CandidateDatabase:
-    def __init__(self) -> None:
+    def __init__(self, row_overrides: dict[str, object] | None = None) -> None:
         self.query = ""
         self.args: tuple[object, ...] = ()
+        self.row_overrides = row_overrides or {}
 
     async def fetch_bounded(
         self, query: str, *args: object, max_rows: int | None = None
@@ -88,6 +89,10 @@ class _CandidateDatabase:
             "customer_rut": None,
             "customer_email": "alberto@example.test",
             "customer_phone": "+56900000000",
+            "signee_names": None,
+            "signee_ruts": None,
+            "signee_phones": None,
+            "signee_emails": None,
             "order_id": UUID("b8970770-6468-4d8c-bd52-5abbd954020e"),
             "order_number": 129182,
             "account_receivable_id": UUID("56d87140-8e97-4f78-975d-0c516471f3c9"),
@@ -103,6 +108,37 @@ class _CandidateDatabase:
             "normalized_bank_name": None,
             "normalized_bank_rut": None,
             "normalized_bank_account": None,
+        }
+        row.update(self.row_overrides)
+        return QueryResult(tuple(row), (row,), 1, False)
+
+
+class _IdentityFallbackDatabase(_CandidateDatabase):
+    def __init__(self) -> None:
+        super().__init__()
+        self.calls = 0
+
+    async def fetch_bounded(
+        self, query: str, *args: object, max_rows: int | None = None
+    ) -> QueryResult:
+        self.calls += 1
+        if self.calls == 1:
+            self.row_overrides = {"customer_name": "Felipe Ruiz"}
+            return await super().fetch_bounded(query, *args, max_rows=max_rows)
+        assert max_rows == 20
+        row = {
+            "customer_name": "Claudio Montecinos",
+            "customer_rut": None,
+            "customer_email": "claudio@example.test",
+            "customer_phone": "+56911112222",
+            "signee_names": "Claudio Felipe Montecinos Muñoz",
+            "signee_ruts": None,
+            "signee_phones": None,
+            "signee_emails": None,
+            "identity_names": "Claudio Montecinos | Claudio Felipe Montecinos Muñoz",
+            "order_id": UUID("b8970770-6468-4d8c-bd52-5abbd954020e"),
+            "order_number": 129182,
+            "full_address": "Otra Calle 123 Santiago",
         }
         return QueryResult(tuple(row), (row,), 1, False)
 
@@ -125,7 +161,7 @@ async def test_candidate_search_stages_enrichment_and_uses_name_tokens_from_glos
     assert "payment_aggregates" not in database.query
     assert ["amigo"] in database.args
     assert observation.candidates[0].customer_name == "Alberto Amigo"
-    assert observation.candidates[0].evidence[0].kind is EvidenceKind.CUSTOMER_NAME
+    assert observation.candidates[0].evidence[0].kind is EvidenceKind.NAME_FRAGMENT
     assert any(
         evidence.kind is EvidenceKind.EXACT_OUTSTANDING
         for evidence in observation.candidates[0].evidence
@@ -151,6 +187,57 @@ async def test_partial_amount_is_supporting_and_amount_only_search_stays_exact()
     assert EvidenceKind.AMOUNT_EXCEEDS_OUTSTANDING not in kinds
     assert "outstanding_amount =" in database.query
     assert "outstanding_amount >" not in database.query
+
+
+async def test_long_transferor_name_matches_shorter_customer_identity() -> None:
+    database = _CandidateDatabase({"customer_name": "Claudio Montecinos"})
+    data = ReplicaInvestigationData(
+        cast(ReplicaDatabase, database), load_knowledge(KNOWLEDGE_DIR), KNOWLEDGE_DIR
+    )
+
+    observation = await data.search_payment_candidates(
+        PaymentCandidateQuery(transferor_name="Claudio Felipe Montecinos Muñoz")
+    )
+
+    kinds = {item.kind for item in observation.candidates[0].evidence}
+    assert EvidenceKind.CUSTOMER_NAME in kinds
+    assert EvidenceKind.IDENTITY_CONFLICT not in kinds
+    assert "COUNT(DISTINCT token.value)" in database.query
+
+
+async def test_transferor_can_match_a_contract_signee() -> None:
+    database = _CandidateDatabase(
+        {"signee_names": "Claudio Felipe Montecinos Muñoz | Otra Persona"}
+    )
+    data = ReplicaInvestigationData(
+        cast(ReplicaDatabase, database), load_knowledge(KNOWLEDGE_DIR), KNOWLEDGE_DIR
+    )
+
+    observation = await data.search_payment_candidates(
+        PaymentCandidateQuery(transferor_name="Claudio Montecinos")
+    )
+
+    kinds = {item.kind for item in observation.candidates[0].evidence}
+    assert EvidenceKind.SIGNEE_NAME in kinds
+    assert EvidenceKind.IDENTITY_CONFLICT not in kinds
+
+
+async def test_identity_fallback_discards_one_token_noise_without_requiring_open_ar() -> None:
+    database = _IdentityFallbackDatabase()
+    data = ReplicaInvestigationData(
+        cast(ReplicaDatabase, database), load_knowledge(KNOWLEDGE_DIR), KNOWLEDGE_DIR
+    )
+
+    observation = await data.search_payment_candidates(
+        PaymentCandidateQuery(transferor_name="Claudio Felipe Montecinos Muñoz")
+    )
+
+    assert database.calls == 2
+    assert [item.customer_name for item in observation.candidates] == ["Claudio Montecinos"]
+    assert observation.candidates[0].account_receivable_id is None
+    assert EvidenceKind.CUSTOMER_NAME in {
+        signal.kind for signal in observation.candidates[0].evidence
+    }
 
 
 @pytest.mark.parametrize(

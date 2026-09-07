@@ -1,5 +1,5 @@
-version: 3
-source: monolith TypeORM entities reviewed 2026-09-01
+version: 4
+source: monolith TypeORM entities reviewed 2026-09-03
 relations:
   user:
     description: Customer identity root; business fields live in personal_details and contact_info.
@@ -29,6 +29,18 @@ relations:
   sale:
     description: Sold booking owning receivables.
     columns: {id: uuid, bookingId: uuid, createdAt: timestamp}
+  solar_system_sale:
+    description: One-to-one bridge from a sale to its solar-system contract.
+    columns: {id: uuid, saleId: uuid, solarSystemContractId: uuid}
+  solar_system_contract:
+    description: Solar contract wrapper exposing the underlying contract ID.
+    columns: {id: uuid, contractId: uuid}
+  signee:
+    description: A person or business authorized on a customer contract.
+    columns: {id: uuid, contractId: uuid, email: varchar}
+  natural_person:
+    description: Legal identity for an individual contract signee.
+    columns: {id: uuid, signeeId: uuid, rut: varchar, phone: varchar, firstName: varchar, middleName: varchar, lastName: varchar, secondLastName: varchar}
   solar_system_installation:
     description: Installation state for a sale.
     columns: {id: uuid, saleId: uuid, canceledAt: timestamp, completedAt: timestamp}

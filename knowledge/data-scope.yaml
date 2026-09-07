@@ -1,6 +1,6 @@
-version: 3
-schema_version: 3
-last_reviewed: 2026-09-01
+version: 4
+schema_version: 4
+last_reviewed: 2026-09-03
 owner: finops
 purpose: payment identification only
 
@@ -26,6 +26,10 @@ relations:
   - {name: house, reason: installation address matching against glosa}
   - {name: commune, reason: normalized installation geography}
   - {name: sale, reason: customer and payment-stage context}
+  - {name: solar_system_sale, reason: bridge from a sale to its customer contract}
+  - {name: solar_system_contract, reason: bridge from a solar sale to its contract signees}
+  - {name: signee, reason: contract-signee identity and email matching}
+  - {name: natural_person, reason: legal identity of individual contract signees}
   - {name: solar_system_installation, reason: installation relevance and cancellation}
   - {name: account_receivable, reason: receivable amount currency parties and status}
   - {name: account_receivable_payment, reason: registered abonos used in outstanding balance}

@@ -45,7 +45,10 @@ limitation so Cerebro can abstain instead of failing the complete Slack run.
 Glosa matching normalizes case, accents, punctuation, and whitespace. A complete normalized
 address is strongest. Partial address evidence requires every numeric token and 70% of address
 words; bounded discovery uses at most six meaningful glosa tokens. Name tokens remain identity
-evidence, not exact-address evidence.
+evidence, not exact-address evidence. Customer and natural-person contract-signee names are
+matched by normalized components: at least two shared components and 75% coverage of either name
+support medium identity confidence. A single shared component is weak fragment evidence and must
+be corroborated; it is never presented as an alternative on its own.
 
 Exact same-currency outstanding balance is supporting evidence. A smaller amount is a possible
 partial payment and reports the remaining balance rather than becoming a contradiction. An

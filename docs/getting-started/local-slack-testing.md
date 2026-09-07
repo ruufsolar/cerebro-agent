@@ -73,7 +73,7 @@ should show no failed jobs.
 2. Confirm Cerebro shows native thread status and posts exactly one reply in that thread.
 3. Without a replica, confirm it reports unavailable sources and returns `unknown`. With
    Azure + replica, confirm any recommendation links to a CRM order returned by the
-   verification tool and includes the compact Slice 5 preview banner.
+   verification tool and includes the compact Cerebro pilot banner.
 4. Reply as a human in the same thread. Confirm a new investigation replies in that
    thread. A message in an unrelated thread must not trigger Cerebro.
 5. Add 🧀 to an investigation response. There should be no flavor reply.
@@ -116,6 +116,11 @@ Restart the stack after changing `.env`. Keep `payment_writes_enabled` and
 
 - Event arrives but no answer: inspect both worker logs and the `slack_event.disposition`,
   `agent_run.status`, and `slack_output.status` rows.
+- 🔌 produces no reply: react to Cerebro's investigation message, not the human root message;
+  then search `slack` and `control-worker` logs for `slack_feedback_recorded` or
+  `slack_feedback_ignored`. If neither appears, verify the installed app has the
+  `reaction_added`/`reaction_removed` subscriptions and `reactions:read`, restart after `.env`
+  changes, and eliminate competing Socket Mode consumers.
 - Duplicate-looking behavior: check for competing consumers first, then verify the Slack
   event IDs/message timestamps; Cerebro has database uniqueness constraints at every stage.
 - Status API failure: the investigation should still finish. Check `assistant:write` and

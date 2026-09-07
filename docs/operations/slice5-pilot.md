@@ -3,9 +3,11 @@
 This is a release gate, not a production launch. Run Cerebro in one private FinOps test
 channel with `CEREBRO_GLOBAL_MODE=review`; keep payment and hold writes disabled.
 
-The baseline synthetic gate passed 20/20 on 2026-09-02 using
+The historical synthetic gate passed 20/20 on 2026-09-02 using
 `payment-identification-slice5-v1`, `payment-identification-knowledge-v3`, and Azure deployment
-`gpt-5-6-luna`. Rerun it after any model, prompt, knowledge, tool, or grounding-policy change.
+`gpt-5-6-luna`. The current `payment-identification-slice5-v2` /
+`payment-identification-knowledge-v4` behavior must be rerun because name matching and replica
+scope changed.
 
 ## Prerequisites
 

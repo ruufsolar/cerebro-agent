@@ -40,7 +40,7 @@ def test_matched_renderer_is_concise() -> None:
     assert len(rendered.split()) <= 110
     assert "*Cliente:*" in rendered
     assert "*Por qué:*" in rendered
-    assert "Slice 5" in rendered
+    assert "Hipótesis, no magia" in rendered
 
 
 def test_ambiguous_no_customer_and_out_of_scope_render_distinctly() -> None:
@@ -119,3 +119,5 @@ def test_renderer_enforces_absolute_length_caps_with_long_fields() -> None:
     assert len(matched.split()) <= 130
     assert len(ambiguous.splitlines()) <= 4
     assert len(ambiguous.split()) <= 130
+    assert "…" not in matched
+    assert "…" not in ambiguous

@@ -16,6 +16,10 @@ CREATE TABLE "order" (id uuid PRIMARY KEY, "orderNumber" integer NOT NULL, "hous
 CREATE TABLE quote (id uuid PRIMARY KEY, "houseId" uuid NOT NULL, price integer NOT NULL, "acceptedAt" timestamp);
 CREATE TABLE booking (id uuid PRIMARY KEY, "userId" uuid NOT NULL, "orderId" uuid NOT NULL, "quoteId" uuid NOT NULL, "confirmedAt" timestamp, "createdAt" timestamp NOT NULL);
 CREATE TABLE sale (id uuid PRIMARY KEY, "bookingId" uuid NOT NULL, "createdAt" timestamp NOT NULL);
+CREATE TABLE solar_system_sale (id uuid PRIMARY KEY, "saleId" uuid NOT NULL, "solarSystemContractId" uuid NOT NULL);
+CREATE TABLE solar_system_contract (id uuid PRIMARY KEY, "contractId" uuid NOT NULL);
+CREATE TABLE signee (id uuid PRIMARY KEY, "contractId" uuid NOT NULL, email varchar NOT NULL);
+CREATE TABLE natural_person (id uuid PRIMARY KEY, "signeeId" uuid NOT NULL, rut varchar NOT NULL, phone varchar NOT NULL, "firstName" varchar NOT NULL, "middleName" varchar, "lastName" varchar NOT NULL, "secondLastName" varchar NOT NULL);
 CREATE TABLE solar_system_installation (id uuid PRIMARY KEY, "saleId" uuid NOT NULL, "canceledAt" timestamp, "completedAt" timestamp);
 CREATE TABLE account_receivable (id uuid PRIMARY KEY, "saleId" uuid NOT NULL, amount numeric NOT NULL, currency varchar NOT NULL, debtor varchar NOT NULL, recipient varchar NOT NULL, type varchar NOT NULL, "canceledAt" timestamp);
 CREATE TABLE account_receivable_payment (id uuid PRIMARY KEY, "accountReceivableId" uuid NOT NULL, amount numeric NOT NULL, currency varchar NOT NULL, "deletedAt" timestamp, "paymentDate" timestamp, comments text);
@@ -36,6 +40,10 @@ INSERT INTO "order" VALUES ('50000000-0000-0000-0000-000000000001', 4242, '40000
 INSERT INTO quote VALUES ('60000000-0000-0000-0000-000000000001', '40000000-0000-0000-0000-000000000001', 1000000, now());
 INSERT INTO booking VALUES ('70000000-0000-0000-0000-000000000001', '00000000-0000-0000-0000-000000000001', '50000000-0000-0000-0000-000000000001', '60000000-0000-0000-0000-000000000001', now(), now());
 INSERT INTO sale VALUES ('80000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001', now());
+INSERT INTO solar_system_contract VALUES ('81000000-0000-0000-0000-000000000001', '82000000-0000-0000-0000-000000000001');
+INSERT INTO solar_system_sale VALUES ('83000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000001', '81000000-0000-0000-0000-000000000001');
+INSERT INTO signee VALUES ('84000000-0000-0000-0000-000000000001', '82000000-0000-0000-0000-000000000001', 'claudio@example.test');
+INSERT INTO natural_person VALUES ('85000000-0000-0000-0000-000000000001', '84000000-0000-0000-0000-000000000001', '22.222.222-2', '+56922222222', 'Claudio', 'Felipe', 'Montecinos', 'Muñoz');
 INSERT INTO solar_system_installation VALUES ('90000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000001', NULL, NULL);
 INSERT INTO account_receivable VALUES ('a0000000-0000-0000-0000-000000000001', '80000000-0000-0000-0000-000000000001', 1000000, 'CLP', 'client', 'ruuf', 'cash', NULL);
 INSERT INTO account_receivable_payment VALUES ('b0000000-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-000000000001', 300000, 'CLP', NULL, now(), 'synthetic fixture');

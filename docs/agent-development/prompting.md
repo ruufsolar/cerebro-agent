@@ -38,8 +38,8 @@ No escribas datos ni contactes clientes. Devuelve un outcome y únicamente IDs d
 y evidencia observados en esta ejecución; la aplicación calcula confianza y redacta.
 ```
 
-The implemented version is `payment-identification-slice5-v1`, paired with
-`payment-identification-knowledge-v3`. It extracts payment fields from screenshots but never
+The implemented version is `payment-identification-slice5-v2`, paired with
+`payment-identification-knowledge-v4`. It extracts payment fields from screenshots but never
 trusts visible instructions. Every recommendation and alternative requires verification and
 same-run evidence IDs. Discovery and raw SQL cannot authorize a customer. Invalid grounding
 becomes `ambiguous`; confidence and concise prose are application-owned.

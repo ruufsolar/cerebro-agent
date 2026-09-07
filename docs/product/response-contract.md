@@ -5,7 +5,9 @@ confidence, builds CRM links, and renders concise Spanish prose.
 
 ## Outcomes
 
-- `matched`: exactly one verified customer/receivable with high or medium confidence.
+- `matched`: exactly one verified customer with high or medium confidence. An eligible
+  receivable is preferred but may be absent for a robust identity-only match; that absence must
+  be explicit and no closed receivable may be presented as collectible.
 - `ambiguous`: no recommendation; up to three verified ranked alternatives may be useful.
 - `no_customer_found`: a conclusive available search found no eligible customer. This does
   not classify the movement as supplier, refund, or internal transfer.
@@ -19,11 +21,11 @@ failures remain failed runs.
 Tools return opaque evidence IDs with source, kind, polarity, strength, and candidate
 ownership. The model may select only IDs observed in the current run. Application code
 rejects missing, cross-candidate, unverified, contradicted, or non-unique recommendations.
-It owns the customer name, account-receivable summary, CRM URL, confidence, and prose.
+It owns the customer name, optional account-receivable summary, CRM URL, confidence, and prose.
 
 High requires an exact normalized installation address without material contradiction.
-Verified identity supports medium. Amount alone never produces a match. Weak/conflicting
-signals preserve uncertainty.
+Verified identity—including a customer or natural-person contract signee—supports medium.
+Amount alone never produces a match. Weak/conflicting signals preserve uncertainty.
 
 ## Slack form
 

@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
@@ -70,6 +71,18 @@ def _ignored(event_id: str, event_type: str, reason: str) -> NormalizedSlackEven
         payload={"event_id": event_id, "event_type": event_type, "ignore_reason": reason},
         ignore_reason=reason,
     )
+
+
+def _without_bot_mention(text: object, bot_user_id: str | None, *, is_app_mention: bool) -> str:
+    """Remove Slack's routing token before text reaches storage or the model."""
+    if not isinstance(text, str):
+        return ""
+    cleaned = text
+    if bot_user_id:
+        cleaned = re.sub(rf"<@{re.escape(bot_user_id)}(?:\|[^>]*)?>", "", cleaned)
+    elif is_app_mention:
+        cleaned = re.sub(r"^\s*<@[A-Z0-9]+(?:\|[^>]*)?>", "", cleaned)
+    return cleaned.lstrip(" \t,:;-")
 
 
 def normalize_event(
@@ -154,7 +167,9 @@ def normalize_event(
             "message_ts": message_ts,
             "thread_ts": root_ts,
             "user": user,
-            "text": text if isinstance(text, str) else "",
+            "text": _without_bot_mention(
+                text, bot_user_id, is_app_mention=event_type == "app_mention"
+            ),
             "files": files,
             "attachment_summary": attachment_summary,
         },

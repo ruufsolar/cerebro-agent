@@ -45,7 +45,7 @@ Last updated: 2026-09-03.
 - Configurable 8-turn, 20-tool, 180-second, and 4,096-output-token budgets.
 - Safe `unknown` outcomes for timeout, budget, refusal, and invalid structured output.
 - Durable bounded tool-call audit records without chain-of-thought.
-- Staged candidate retrieval, glosa-to-customer-name token evidence, and bounded retries for
+- Staged candidate retrieval, conservative glosa-to-name fragment evidence, and bounded retries for
   physical-replica recovery conflicts. Exhausted replica retries become an unavailable-source
   observation rather than a generic failed Slack run.
 - Partial tool audits survive fatal model/provider failures and are persisted idempotently.
@@ -71,6 +71,12 @@ Last updated: 2026-09-03.
 - Normalized address matching, bounded noisy-glosa token discovery, and correct partial-payment
   semantics. Smaller same-currency amounts are not contradictions; overpayments and currency
   mismatches are.
+- Component-aware identity matching tolerates additional/missing personal names and searches both
+  booking-customer identity and natural-person contract signees. Two strongly overlapping name
+  components support medium confidence; a lone fragment remains weak and is not shown as an
+  alternative without corroboration.
+- Slack routing mentions are removed before message persistence/model input. Alternative reasons
+  are rendered from validated evidence categories instead of clipping prose mid-sentence.
 - Concise outcome-specific Slack rendering with deterministic line and word budgets.
 - A 20-case anonymized Slice 5 corpus with outcome, evidence, tool, safety, and verbosity graders
   plus an optional JSON gate report.
@@ -99,11 +105,12 @@ Last updated: 2026-09-03.
 
 ## Slice 5 acceptance status
 
-- Live synthetic Luna gate: **passed 20/20 on 2026-09-02** with
+- Historical live synthetic Luna gate: **passed 20/20 on 2026-09-02** with
   `payment-identification-slice5-v1`, `payment-identification-knowledge-v3`, and deployment
   `gpt-5-6-luna`; zero wrong high-confidence matches and zero unsupported claims.
-- Pending: complete the ten-case controlled FinOps Slack pilot and obtain explicit FinOps
-  signoff.
+- Current implementation is `payment-identification-slice5-v2` with
+  `payment-identification-knowledge-v4`; rerun the synthetic gate before completing the ten-case
+  controlled FinOps Slack pilot and obtaining explicit FinOps signoff.
 
 Until the Slack pilot passes, payment identification remains preview. Slice 6A's hardening
 is implemented; running the real ten cases, recording aggregate results, completing the

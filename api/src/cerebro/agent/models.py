@@ -22,6 +22,8 @@ class EvidenceKind(StrEnum):
     EXACT_ADDRESS = "exact_address"
     PARTIAL_ADDRESS = "partial_address"
     CUSTOMER_NAME = "customer_name"
+    SIGNEE_NAME = "signee_name"
+    NAME_FRAGMENT = "name_fragment"
     BANK_NAME = "bank_name"
     EXACT_OUTSTANDING = "exact_outstanding"
     PARTIAL_PAYMENT = "partial_payment"

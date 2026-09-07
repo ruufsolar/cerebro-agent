@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from cerebro.agent.models import (
     Confidence,
     CustomerCandidate,
+    EvidenceKind,
+    EvidencePolarity,
     IdentificationOutcome,
     PaymentIdentification,
     ToolAuditRecord,
@@ -81,7 +83,7 @@ def render_identification(
         Confidence.UNKNOWN: "no sé",
     }[result.confidence]
     if run_result.prompt_version and "slice5" in run_result.prompt_version:
-        banner = "🧪 *Slice 5 — piloto con datos reales e imágenes; sin escrituras.*"
+        banner = "🧠 *Cerebro — piloto sin escrituras. Hipótesis, no magia.*"
     elif run_result.prompt_version and "slice4" in run_result.prompt_version:
         banner = "🧪 *Slice 4 — datos reales y capturas; sin correo ni escrituras.*"
     elif run_result.prompt_version and "slice3" in run_result.prompt_version:
@@ -122,7 +124,7 @@ def render_identification(
         if pending:
             tail.append(f"*No pude verificar:* {pending}")
         if result.alternatives:
-            tail.append(f"*Alternativas:* {_render_alternatives(result, max_reason_words=4)}")
+            tail.append(f"*Alternativas:* {_render_alternatives(result)}")
         if tail:
             lines.append(" · ".join(tail))
         return "\n".join(lines)
@@ -144,7 +146,7 @@ def render_identification(
     ]
     details: list[str] = []
     if result.alternatives:
-        details.append(f"*Opciones:* {_render_alternatives(result, max_reason_words=4)}")
+        details.append(f"*Opciones:* {_render_alternatives(result)}")
     if pending:
         details.append(f"*Falta:* {pending}")
     if details:
@@ -156,15 +158,41 @@ def _clip_words(value: str, limit: int) -> str:
     words = value.split()
     if len(words) <= limit:
         return value.strip()
-    return " ".join(words[:limit]).rstrip(".,;:") + "…"
+    return " ".join(words[:limit]).rstrip(".,;:")
 
 
-def _render_alternatives(result: PaymentIdentification, *, max_reason_words: int) -> str:
-    return "; ".join(
-        (
-            _customer_link(candidate, max_name_words=5)
-            + (f" — {_clip_words(candidate.reason, max_reason_words)}" if candidate.reason else "")
+def _render_alternatives(result: PaymentIdentification) -> str:
+    labels = {
+        EvidenceKind.EXACT_ADDRESS: "dirección exacta",
+        EvidenceKind.PARTIAL_ADDRESS: "dirección parcial",
+        EvidenceKind.CUSTOMER_NAME: "nombre del cliente",
+        EvidenceKind.SIGNEE_NAME: "nombre de firmante",
+        EvidenceKind.NAME_FRAGMENT: "fragmento de nombre",
+        EvidenceKind.RUT: "RUT",
+        EvidenceKind.EMAIL: "correo",
+        EvidenceKind.PHONE: "teléfono",
+        EvidenceKind.BANK_NAME: "titular bancario",
+        EvidenceKind.BANK_ACCOUNT: "cuenta bancaria",
+        EvidenceKind.EXACT_OUTSTANDING: "saldo exacto",
+        EvidenceKind.PARTIAL_PAYMENT: "abono posible",
+        EvidenceKind.VAMBE_CONTEXT: "contexto de Vambe",
+    }
+    evidence = {item.evidence_id: item for item in result.evidence}
+
+    def compact_reason(candidate: CustomerCandidate) -> str:
+        reasons = list(
+            dict.fromkeys(
+                labels[signal.kind]
+                for evidence_id in candidate.evidence_ids
+                if (signal := evidence.get(evidence_id)) is not None
+                and signal.polarity is EvidencePolarity.SUPPORTING
+                and signal.kind in labels
+            )
         )
+        return " + ".join(reasons[:2]) or "evidencia por verificar"
+
+    return "; ".join(
+        f"{_customer_link(candidate, max_name_words=5)} — {compact_reason(candidate)}"
         for candidate in result.alternatives[:3]
     )
 
@@ -480,7 +508,7 @@ async def execute_run(run_id: UUID) -> None:
                         ),
                         unable_to_verify=["cliente", "cuenta por cobrar", "evidencia del pago"],
                     ),
-                    prompt_version="payment-identification-slice5-v1",
+                    prompt_version="payment-identification-slice5-v2",
                 )
             result = _append_image_limitation(result, image_batch.ingestion)
         body = render_identification(result, image_batch.ingestion)

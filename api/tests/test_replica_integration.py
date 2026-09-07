@@ -11,6 +11,7 @@ from cerebro.agent.data_tools import (
     VambeQuery,
     VerifyCandidateQuery,
 )
+from cerebro.agent.models import EvidenceKind
 from cerebro.config import AppConfig
 from cerebro.replica.database import ReplicaDatabase
 from cerebro.replica.investigation import ReplicaInvestigationData
@@ -54,6 +55,14 @@ async def test_synthetic_replica_supports_the_complete_readonly_investigation() 
         assert candidates.candidates[0].order_id == ORDER_ID
         assert candidates.candidates[0].verified is False
         assert candidates.candidates[0].outstanding_amount == Decimal("700000")
+
+        signee_candidates = await data.search_payment_candidates(
+            PaymentCandidateQuery(transferor_name="Claudio Montecinos")
+        )
+        assert signee_candidates.audit.row_count == 1
+        assert EvidenceKind.SIGNEE_NAME in {
+            signal.kind for signal in signee_candidates.candidates[0].evidence
+        }
 
         verified = await data.verify_payment_candidate(
             VerifyCandidateQuery(

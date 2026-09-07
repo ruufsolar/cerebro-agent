@@ -300,6 +300,47 @@ async def test_model_candidates_require_tool_support_and_url_is_application_owne
     assert supported.account_receivable_summary == "cash; saldo pendiente 700000 CLP"
 
 
+async def test_verified_identity_without_eligible_receivable_can_match_at_medium_confidence() -> (
+    None
+):
+    signal = EvidenceSignal(
+        evidence_id="ev_001",
+        kind=EvidenceKind.SIGNEE_NAME,
+        source=EvidenceSource.PAYMENT_CANDIDATES,
+        polarity=EvidencePolarity.SUPPORTING,
+        strength=EvidenceStrength.MEDIUM,
+        description="El transferente coincide con un firmante del contrato.",
+        order_id=ORDER_ID,
+    )
+    candidate = InvestigationCandidate(
+        customer_name="Cliente",
+        order_id=ORDER_UUID,
+        evidence=[signal],
+        verified=True,
+    )
+    state = RunState(max_tool_calls=1)
+    state.candidates[(ORDER_ID, None)] = candidate
+    state.verified_candidates[(ORDER_ID, None)] = candidate
+    state.evidence[signal.evidence_id] = signal
+    output = ModelIdentification(
+        outcome=IdentificationOutcome.MATCHED,
+        recommended_customer=ModelCandidate(order_id=ORDER_ID, evidence_ids=["ev_001"]),
+    )
+    runner = OpenAIAgentsRunner(
+        AppConfig(azure_openai_endpoint="https://example.test", azure_openai_api_key="test"),
+        client=AsyncOpenAI(api_key="test", base_url="https://example.test/v1/"),
+    )
+    try:
+        result = runner._map_output(output, state)
+    finally:
+        await runner.close()
+
+    assert result.outcome is IdentificationOutcome.MATCHED
+    assert result.confidence is Confidence.MEDIUM
+    assert result.account_receivable_summary is None
+    assert "cuenta por cobrar elegible" in result.unable_to_verify
+
+
 @pytest.mark.parametrize(
     ("kinds", "expected_outcome", "expected_confidence"),
     [
@@ -312,6 +353,16 @@ async def test_model_candidates_require_tool_support_and_url_is_application_owne
             [EvidenceKind.EXACT_OUTSTANDING],
             IdentificationOutcome.AMBIGUOUS,
             Confidence.UNKNOWN,
+        ),
+        (
+            [EvidenceKind.NAME_FRAGMENT],
+            IdentificationOutcome.AMBIGUOUS,
+            Confidence.UNKNOWN,
+        ),
+        (
+            [EvidenceKind.NAME_FRAGMENT, EvidenceKind.EXACT_OUTSTANDING],
+            IdentificationOutcome.MATCHED,
+            Confidence.MEDIUM,
         ),
         (
             [EvidenceKind.CUSTOMER_NAME, EvidenceKind.CURRENCY_MISMATCH],
@@ -624,7 +675,7 @@ async def test_safe_sdk_outcomes_return_unknown(
         await runner.close()
     assert result.identification.confidence is Confidence.UNKNOWN
     assert result.completion_reason is reason
-    assert result.prompt_version == "payment-identification-slice5-v1"
+    assert result.prompt_version == "payment-identification-slice5-v2"
 
 
 async def test_success_records_usage_and_disables_sensitive_tracing(

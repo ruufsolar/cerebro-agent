@@ -172,6 +172,7 @@ async def _process_reaction(session: AsyncSession, event: SlackEvent) -> UUID | 
     if output is None:
         event.disposition = SlackEventDisposition.IGNORED
         event.processed_at = datetime.now(UTC)
+        log_event(logger, "slack_feedback_ignored", event_id=event.id, state="unknown_output")
         return None
     added = event.event_type == "reaction_added"
     reaction = str(payload["reaction"])
@@ -231,6 +232,15 @@ async def _process_reaction(session: AsyncSession, event: SlackEvent) -> UUID | 
         output_id = await session.scalar(flavor_statement)
     event.disposition = SlackEventDisposition.PROCESSED
     event.processed_at = datetime.now(UTC)
+    log_event(
+        logger,
+        "slack_feedback_recorded",
+        event_id=event.id,
+        output_id=output.id,
+        state="active" if added else "inactive",
+    )
+    if output_id is not None:
+        log_event(logger, "slack_feedback_flavor_queued", output_id=output_id)
     return output_id
 
 

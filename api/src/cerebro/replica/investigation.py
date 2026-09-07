@@ -35,6 +35,14 @@ WITH candidate_core AS (
     pd.rut AS customer_rut,
     ci.email AS customer_email,
     ci.phone AS customer_phone,
+    signees.names AS signee_names,
+    signees.ruts AS signee_ruts,
+    signees.phones AS signee_phones,
+    signees.emails AS signee_emails,
+    CONCAT_WS(' | ',
+      pd."firstName" || ' ' || pd."lastName",
+      signees.names
+    ) AS identity_names,
     o.id AS order_id,
     o."orderNumber" AS order_number,
     ar.id AS account_receivable_id,
@@ -60,6 +68,23 @@ WITH candidate_core AS (
   JOIN contact_info ci ON ci."userId" = b."userId"
   JOIN house h ON h.id = o."houseId"
   JOIN commune c ON c.id = h."communeId"
+  LEFT JOIN solar_system_sale sss ON sss."saleId" = s.id
+  LEFT JOIN solar_system_contract ssc ON ssc.id = sss."solarSystemContractId"
+  LEFT JOIN LATERAL (
+    SELECT
+      STRING_AGG(
+        DISTINCT NULLIF(BTRIM(CONCAT_WS(' ',
+          person."firstName", person."middleName", person."lastName", person."secondLastName"
+        )), ''),
+        ' | '
+      ) AS names,
+      STRING_AGG(DISTINCT person.rut, ' | ') AS ruts,
+      STRING_AGG(DISTINCT person.phone, ' | ') AS phones,
+      STRING_AGG(DISTINCT signer.email, ' | ') AS emails
+    FROM signee signer
+    LEFT JOIN natural_person person ON person."signeeId" = signer.id
+    WHERE signer."contractId" = ssc."contractId"
+  ) signees ON TRUE
   JOIN LATERAL (
     SELECT installation.id
     FROM solar_system_installation installation
@@ -103,6 +128,47 @@ WITH candidate_core AS (
     ) > 0
 )
 SELECT * FROM candidate_core
+"""
+
+_CUSTOMER_IDENTITY_CORE = """
+SELECT
+  pd."firstName" || ' ' || pd."lastName" AS customer_name,
+  pd.rut AS customer_rut,
+  ci.email AS customer_email,
+  ci.phone AS customer_phone,
+  signees.names AS signee_names,
+  signees.ruts AS signee_ruts,
+  signees.phones AS signee_phones,
+  signees.emails AS signee_emails,
+  CONCAT_WS(' | ', pd."firstName" || ' ' || pd."lastName", signees.names) AS identity_names,
+  o.id AS order_id,
+  o."orderNumber" AS order_number,
+  CONCAT_WS(' ', h."addressStreet", h."addressExternalNumber", h."addressInternalNumber", c.name)
+    AS full_address
+FROM sale s
+JOIN booking b ON b.id = s."bookingId"
+JOIN "order" o ON o.id = b."orderId"
+JOIN personal_details pd ON pd."userId" = b."userId"
+JOIN contact_info ci ON ci."userId" = b."userId"
+JOIN house h ON h.id = o."houseId"
+JOIN commune c ON c.id = h."communeId"
+LEFT JOIN solar_system_sale sss ON sss."saleId" = s.id
+LEFT JOIN solar_system_contract ssc ON ssc.id = sss."solarSystemContractId"
+LEFT JOIN LATERAL (
+  SELECT
+    STRING_AGG(
+      DISTINCT NULLIF(BTRIM(CONCAT_WS(' ',
+        person."firstName", person."middleName", person."lastName", person."secondLastName"
+      )), ''),
+      ' | '
+    ) AS names,
+    STRING_AGG(DISTINCT person.rut, ' | ') AS ruts,
+    STRING_AGG(DISTINCT person.phone, ' | ') AS phones,
+    STRING_AGG(DISTINCT signer.email, ' | ') AS emails
+  FROM signee signer
+  LEFT JOIN natural_person person ON person."signeeId" = signer.id
+  WHERE signer."contractId" = ssc."contractId"
+) signees ON TRUE
 """
 
 _INSTALLMENT_LATERAL = """
@@ -151,6 +217,56 @@ def _glosa_name_tokens(value: str | None) -> list[str]:
     return sorted(tokens, key=lambda token: (-len(token), tokens.index(token)))[:6]
 
 
+def _person_name_tokens(value: str | None) -> set[str]:
+    particles = {"de", "del", "la", "las", "los", "y"}
+    return {token for token in _plain(value).split() if len(token) >= 3 and token not in particles}
+
+
+def _individual_names(value: object) -> tuple[str, ...]:
+    return tuple(part.strip() for part in str(value or "").split("|") if part.strip())
+
+
+def _strong_name_match(query: str, candidate: str) -> bool:
+    query_tokens = _person_name_tokens(query)
+    candidate_tokens = _person_name_tokens(candidate)
+    shared = query_tokens & candidate_tokens
+    if len(shared) < 2:
+        return False
+    return (
+        max(
+            len(shared) / len(query_tokens),
+            len(shared) / len(candidate_tokens),
+        )
+        >= 0.75
+    )
+
+
+def _any_strong_name_match(query: str, candidates: object) -> bool:
+    return any(_strong_name_match(query, candidate) for candidate in _individual_names(candidates))
+
+
+def _name_fragments(query: str, candidates: object) -> set[str]:
+    query_tokens = _person_name_tokens(query)
+    candidate_tokens = {
+        token
+        for candidate in _individual_names(candidates)
+        for token in _person_name_tokens(candidate)
+    }
+    return {token for token in query_tokens & candidate_tokens if len(token) >= 4}
+
+
+def _matches_delimited(value: str, candidates: object, *, digits: bool = False) -> bool:
+    if digits:
+        target = _digits(value)
+        return bool(target) and any(
+            _digits(candidate) == target for candidate in _individual_names(candidates)
+        )
+    target = value.strip().casefold()
+    return bool(target) and any(
+        candidate.casefold() == target for candidate in _individual_names(candidates)
+    )
+
+
 def _partial_address_match(glosa: str, address: str) -> bool:
     glosa_tokens = set(glosa.split())
     address_tokens = address.split()
@@ -183,7 +299,9 @@ def _signal(
         strength=strength,
         description=description,
         order_id=str(row["order_id"]),
-        account_receivable_id=str(row["account_receivable_id"]),
+        account_receivable_id=(
+            str(row["account_receivable_id"]) if row.get("account_receivable_id") else None
+        ),
     )
 
 
@@ -215,8 +333,6 @@ def _candidate(
     requested_currency = getattr(request, "currency", None) or "CLP"
     if requested_address:
         left, right = _plain(requested_address), _plain(address)
-        name_tokens = set(_glosa_name_tokens(requested_address))
-        customer_tokens = set(_glosa_name_tokens(customer_name))
         if right and right in left:
             evidence.append(
                 _signal(
@@ -239,7 +355,7 @@ def _candidate(
                     description="La glosa coincide parcialmente con la dirección de instalación.",
                 )
             )
-        elif name_tokens & customer_tokens:
+        elif _strong_name_match(requested_address, customer_name):
             evidence.append(
                 _signal(
                     row,
@@ -247,12 +363,37 @@ def _candidate(
                     kind=EvidenceKind.CUSTOMER_NAME,
                     polarity=EvidencePolarity.SUPPORTING,
                     strength=EvidenceStrength.MEDIUM,
-                    description="La glosa contiene parte distintiva del nombre del cliente.",
+                    description="La glosa contiene el nombre del cliente.",
+                )
+            )
+        elif _any_strong_name_match(requested_address, row.get("signee_names")):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.SIGNEE_NAME,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="La glosa contiene el nombre de un firmante del contrato.",
+                )
+            )
+        elif _name_fragments(
+            requested_address,
+            " | ".join((customer_name, str(row.get("signee_names") or ""))),
+        ):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.NAME_FRAGMENT,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.WEAK,
+                    description="La glosa comparte un fragmento de nombre con el cliente.",
                 )
             )
     if transferor:
         normalized = _plain(transferor)
-        if normalized in _plain(customer_name) or _plain(customer_name) in normalized:
+        if _strong_name_match(transferor, customer_name):
             evidence.append(
                 _signal(
                     row,
@@ -261,6 +402,17 @@ def _candidate(
                     polarity=EvidencePolarity.SUPPORTING,
                     strength=EvidenceStrength.MEDIUM,
                     description="El nombre del transferente coincide con el cliente.",
+                )
+            )
+        elif _any_strong_name_match(transferor, row.get("signee_names")):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.SIGNEE_NAME,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="El transferente coincide con un firmante del contrato.",
                 )
             )
         elif any(
@@ -275,6 +427,20 @@ def _candidate(
                     polarity=EvidencePolarity.SUPPORTING,
                     strength=EvidenceStrength.WEAK,
                     description=("El nombre coincide con una cuenta bancaria almacenada de apoyo."),
+                )
+            )
+        elif _name_fragments(
+            transferor,
+            " | ".join((customer_name, str(row.get("signee_names") or ""))),
+        ):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.NAME_FRAGMENT,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.WEAK,
+                    description="El transferente comparte sólo una parte del nombre registrado.",
                 )
             )
         else:
@@ -343,11 +509,15 @@ def _candidate(
     if isinstance(request, PaymentCandidateQuery):
         if request.transferor_rut:
             rut = _digits(request.transferor_rut)
-            if rut and rut in {
-                _digits(str(row.get("customer_rut") or "")),
-                _digits(str(row.get("legacy_bank_rut") or "")),
-                _digits(str(row.get("normalized_bank_rut") or "")),
-            }:
+            if rut and any(
+                _matches_delimited(rut, row.get(field), digits=True)
+                for field in (
+                    "customer_rut",
+                    "signee_ruts",
+                    "legacy_bank_rut",
+                    "normalized_bank_rut",
+                )
+            ):
                 evidence.append(
                     _signal(
                         row,
@@ -376,9 +546,9 @@ def _candidate(
                         ),
                     )
                 )
-        if (
-            request.email
-            and request.email.casefold() == str(row.get("customer_email") or "").casefold()
+        if request.email and any(
+            _matches_delimited(request.email, row.get(field))
+            for field in ("customer_email", "signee_emails")
         ):
             evidence.append(
                 _signal(
@@ -390,8 +560,9 @@ def _candidate(
                     description="El correo coincide con el cliente.",
                 )
             )
-        if request.phone and _digits(request.phone) == _digits(
-            str(row.get("customer_phone") or "")
+        if request.phone and any(
+            _matches_delimited(request.phone, row.get(field), digits=True)
+            for field in ("customer_phone", "signee_phones")
         ):
             evidence.append(
                 _signal(
@@ -416,6 +587,150 @@ def _candidate(
         currency=currency,
         evidence=evidence,
         verified=verified,
+    )
+
+
+def _identity_candidate(
+    row: dict[str, object],
+    request: PaymentCandidateQuery | VerifyCandidateQuery,
+    *,
+    verified: bool,
+) -> InvestigationCandidate:
+    evidence: list[EvidenceSignal] = []
+    customer_name = str(row["customer_name"])
+    transferor = getattr(request, "transferor_name", None)
+    requested_address = getattr(request, "glosa_or_address", None) or getattr(
+        request, "address", None
+    )
+    if transferor:
+        if _strong_name_match(transferor, customer_name):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.CUSTOMER_NAME,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="El nombre del transferente coincide con el cliente.",
+                )
+            )
+        elif _any_strong_name_match(transferor, row.get("signee_names")):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.SIGNEE_NAME,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="El transferente coincide con un firmante del contrato.",
+                )
+            )
+        elif _name_fragments(
+            transferor,
+            " | ".join((customer_name, str(row.get("signee_names") or ""))),
+        ):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.NAME_FRAGMENT,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.WEAK,
+                    description="El transferente comparte sólo una parte del nombre registrado.",
+                )
+            )
+    if requested_address:
+        if _strong_name_match(requested_address, customer_name):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.CUSTOMER_NAME,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="La glosa contiene el nombre del cliente.",
+                )
+            )
+        elif _any_strong_name_match(requested_address, row.get("signee_names")):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.SIGNEE_NAME,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="La glosa contiene el nombre de un firmante del contrato.",
+                )
+            )
+    if isinstance(request, PaymentCandidateQuery):
+        if request.transferor_rut and any(
+            _matches_delimited(request.transferor_rut, row.get(field), digits=True)
+            for field in ("customer_rut", "signee_ruts")
+        ):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.RUT,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="El RUT coincide con la identidad almacenada.",
+                )
+            )
+        if request.email and any(
+            _matches_delimited(request.email, row.get(field))
+            for field in ("customer_email", "signee_emails")
+        ):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.EMAIL,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="El correo coincide con la identidad almacenada.",
+                )
+            )
+        if request.phone and any(
+            _matches_delimited(request.phone, row.get(field), digits=True)
+            for field in ("customer_phone", "signee_phones")
+        ):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.PHONE,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="El teléfono coincide con la identidad almacenada.",
+                )
+            )
+    return InvestigationCandidate(
+        customer_name=customer_name,
+        order_id=UUID(str(row["order_id"])),
+        order_number=int(str(row["order_number"])),
+        evidence=evidence,
+        verified=verified,
+    )
+
+
+def _is_meaningful_candidate(candidate: InvestigationCandidate) -> bool:
+    meaningful = {
+        EvidenceKind.EXACT_ADDRESS,
+        EvidenceKind.PARTIAL_ADDRESS,
+        EvidenceKind.CUSTOMER_NAME,
+        EvidenceKind.SIGNEE_NAME,
+        EvidenceKind.RUT,
+        EvidenceKind.EMAIL,
+        EvidenceKind.PHONE,
+        EvidenceKind.BANK_NAME,
+        EvidenceKind.BANK_ACCOUNT,
+        EvidenceKind.EXACT_OUTSTANDING,
+        EvidenceKind.VAMBE_CONTEXT,
+    }
+    return any(
+        signal.polarity is EvidencePolarity.SUPPORTING and signal.kind in meaningful
+        for signal in candidate.evidence
     )
 
 
@@ -476,6 +791,87 @@ class ReplicaInvestigationData:
             audit=ToolAuditMetadata(row_count=len(rows), truncated=False),
         )
 
+    async def _search_customer_identities(self, request: PaymentCandidateQuery) -> QueryResult:
+        params: list[Any] = []
+
+        def parameter(value: Any) -> str:
+            params.append(value)
+            return f"${len(params)}"
+
+        matches: list[tuple[str, str]] = []
+        for alias, value in (
+            ("transferor_identity_match", request.transferor_name),
+            ("glosa_identity_match", request.glosa_or_address),
+        ):
+            if not value:
+                continue
+            raw_parameter = parameter(value)
+            tokens = sorted(_person_name_tokens(value))
+            token_match = "FALSE"
+            if len(tokens) >= 2:
+                token_parameter = parameter(tokens)
+                token_match = (
+                    "(SELECT COUNT(DISTINCT token.value) FROM UNNEST("
+                    f"{token_parameter}::text[]) AS token(value) WHERE "
+                    "(' ' || REGEXP_REPLACE(immutable_unaccent(LOWER(identity_names)), "
+                    "'[^a-z0-9]+', ' ', 'g') || ' ') LIKE '% ' || "
+                    "immutable_unaccent(LOWER(token.value)) || ' %') >= 2"
+                )
+            matches.append(
+                (
+                    alias,
+                    "(immutable_unaccent(LOWER(identity_names)) LIKE '%' || "
+                    f"immutable_unaccent(LOWER({raw_parameter})) || '%' OR {token_match})",
+                )
+            )
+        if request.transferor_rut:
+            value = parameter(request.transferor_rut)
+            matches.append(
+                (
+                    "rut_identity_match",
+                    "REGEXP_REPLACE(CONCAT_WS(' ', customer_rut, signee_ruts), "
+                    "'[^0-9]', '', 'g') LIKE '%' || "
+                    f"REGEXP_REPLACE({value}, '[^0-9]', '', 'g') || '%'",
+                )
+            )
+        if request.email:
+            value = parameter(request.email.lower())
+            matches.append(
+                (
+                    "email_identity_match",
+                    "(' | ' || LOWER(CONCAT_WS(' | ', customer_email, signee_emails)) || "
+                    f"' | ') LIKE '% | ' || {value} || ' | %'",
+                )
+            )
+        if request.phone:
+            value = parameter(request.phone)
+            matches.append(
+                (
+                    "phone_identity_match",
+                    "REGEXP_REPLACE(CONCAT_WS(' ', customer_phone, signee_phones), "
+                    "'[^0-9]', '', 'g') LIKE '%' || "
+                    f"REGEXP_REPLACE({value}, '[^0-9]', '', 'g') || '%'",
+                )
+            )
+        if not matches:
+            return QueryResult((), (), 0, False)
+        aliases = [name for name, _ in matches]
+        select_matches = ",\n".join(f"{expression} AS {name}" for name, expression in matches)
+        ordering = ", ".join(f"{name} DESC" for name in aliases)
+        query = f"""
+        WITH identities AS ({_CUSTOMER_IDENTITY_CORE}), scored AS (
+          SELECT identities.*, {select_matches} FROM identities
+        )
+        SELECT customer_name, customer_rut, customer_email, customer_phone,
+               signee_names, signee_ruts, signee_phones, signee_emails,
+               identity_names, order_id, order_number, full_address
+        FROM scored
+        WHERE {" OR ".join(aliases)}
+        ORDER BY {ordering}, order_number DESC
+        LIMIT 20
+        """
+        return await self.database.fetch_bounded(query, *params, max_rows=20)
+
     async def search_payment_candidates(self, request: PaymentCandidateQuery) -> ToolObservation:
         params: list[Any] = []
 
@@ -503,7 +899,7 @@ class ReplicaInvestigationData:
                         "glosa_name_match",
                         "EXISTS (SELECT 1 FROM UNNEST("
                         f"{token_parameter}::text[]) AS token(value) WHERE "
-                        "immutable_unaccent(LOWER(customer_name)) LIKE '%' || "
+                        "immutable_unaccent(LOWER(identity_names)) LIKE '%' || "
                         "immutable_unaccent(LOWER(token.value)) || '%')",
                     )
                 )
@@ -518,11 +914,22 @@ class ReplicaInvestigationData:
                 )
         if request.transferor_name:
             p = parameter(request.transferor_name)
+            name_tokens = sorted(_person_name_tokens(request.transferor_name))
+            token_match = "FALSE"
+            if len(name_tokens) >= 2:
+                token_parameter = parameter(name_tokens)
+                token_match = (
+                    "(SELECT COUNT(DISTINCT token.value) FROM UNNEST("
+                    f"{token_parameter}::text[]) AS token(value) WHERE "
+                    "(' ' || REGEXP_REPLACE(immutable_unaccent(LOWER(identity_names)), "
+                    "'[^a-z0-9]+', ' ', 'g') || ' ') LIKE '% ' || "
+                    "immutable_unaccent(LOWER(token.value)) || ' %') >= 2"
+                )
             matches.append(
                 (
                     "customer_name_match",
-                    "immutable_unaccent(LOWER(customer_name)) LIKE '%' || "
-                    f"immutable_unaccent(LOWER({p})) || '%'",
+                    "(immutable_unaccent(LOWER(identity_names)) LIKE '%' || "
+                    f"immutable_unaccent(LOWER({p})) || '%' OR {token_match})",
                 )
             )
             matches.append(
@@ -538,7 +945,7 @@ class ReplicaInvestigationData:
             matches.append(
                 (
                     "rut_match",
-                    "REGEXP_REPLACE(CONCAT_WS(' ', customer_rut, legacy_bank_rut, "
+                    "REGEXP_REPLACE(CONCAT_WS(' ', customer_rut, signee_ruts, legacy_bank_rut, "
                     "normalized_bank_rut), '[^0-9]', '', 'g') LIKE '%' || "
                     f"REGEXP_REPLACE({p}, '[^0-9]', '', 'g') || '%'",
                 )
@@ -555,14 +962,21 @@ class ReplicaInvestigationData:
             )
         if request.email:
             p = parameter(request.email.lower())
-            matches.append(("email_match", f"LOWER(customer_email) = {p}"))
+            matches.append(
+                (
+                    "email_match",
+                    "(' | ' || LOWER(CONCAT_WS(' | ', customer_email, signee_emails)) || "
+                    f"' | ') LIKE '% | ' || {p} || ' | %'",
+                )
+            )
         if request.phone:
             p = parameter(request.phone)
             matches.append(
                 (
                     "phone_match",
-                    "REGEXP_REPLACE(customer_phone, '[^0-9]', '', 'g') = "
-                    f"REGEXP_REPLACE({p}, '[^0-9]', '', 'g')",
+                    "REGEXP_REPLACE(CONCAT_WS(' ', customer_phone, signee_phones), "
+                    "'[^0-9]', '', 'g') LIKE '%' || "
+                    f"REGEXP_REPLACE({p}, '[^0-9]', '', 'g') || '%'",
                 )
             )
         if request.amount is not None:
@@ -583,7 +997,8 @@ class ReplicaInvestigationData:
           LIMIT 20
         )
         SELECT matched.customer_name, matched.customer_rut, matched.customer_email,
-               matched.customer_phone,
+               matched.customer_phone, matched.signee_names, matched.signee_ruts,
+               matched.signee_phones, matched.signee_emails, matched.identity_names,
                order_id, order_number, account_receivable_id, account_receivable_type,
                account_receivable_amount, currency, outstanding_amount, installment_summary,
                full_address, legacy_bank_name, legacy_bank_rut, legacy_bank_account,
@@ -594,13 +1009,40 @@ class ReplicaInvestigationData:
         """
         result = await self.database.fetch_bounded(query, *params, max_rows=20)
         candidates = [_candidate(row, request, verified=False) for row in result.rows]
+        candidates = [candidate for candidate in candidates if _is_meaningful_candidate(candidate)]
+        identity_result = QueryResult((), (), 0, False)
+        has_identity_input = any(
+            (
+                request.glosa_or_address,
+                request.transferor_name,
+                request.transferor_rut,
+                request.email,
+                request.phone,
+            )
+        )
+        if has_identity_input and not candidates:
+            identity_result = await self._search_customer_identities(request)
+            identity_candidates = [
+                _identity_candidate(row, request, verified=False) for row in identity_result.rows
+            ]
+            candidates.extend(
+                candidate
+                for candidate in identity_candidates
+                if _is_meaningful_candidate(candidate)
+            )
         return ToolObservation(
             source="payment_candidates",
             available=True,
-            summary=f"Se encontraron {len(candidates)} candidatos elegibles.",
+            summary=f"Se encontraron {len(candidates)} candidatos para investigar.",
             candidates=candidates,
-            limitations=["Las cuentas bancarias son evidencia de apoyo, no decisiva."],
-            audit=ToolAuditMetadata(row_count=result.row_count, truncated=result.truncated),
+            limitations=[
+                "Las cuentas bancarias son evidencia de apoyo, no decisiva.",
+                "Una identidad puede no tener una cuenta por cobrar actualmente elegible.",
+            ],
+            audit=ToolAuditMetadata(
+                row_count=result.row_count + identity_result.row_count,
+                truncated=result.truncated or identity_result.truncated,
+            ),
         )
 
     async def verify_payment_candidate(self, request: VerifyCandidateQuery) -> ToolObservation:
@@ -621,16 +1063,39 @@ class ReplicaInvestigationData:
             max_rows=10,
         )
         candidates = [_candidate(row, request, verified=True) for row in result.rows]
+        identity_result = QueryResult((), (), 0, False)
+        if not candidates and request.account_receivable_id is None:
+            identity_result = await self.database.fetch_bounded(
+                f"""
+                WITH identities AS ({_CUSTOMER_IDENTITY_CORE})
+                SELECT * FROM identities WHERE order_id = $1
+                """,
+                request.order_id,
+                max_rows=1,
+            )
+            candidates = [
+                _identity_candidate(row, request, verified=True) for row in identity_result.rows
+            ]
         return ToolObservation(
             source="candidate_verification",
             available=True,
             summary=(
-                "Candidato verificado contra la réplica."
+                "Cliente y cuenta por cobrar verificados contra la réplica."
+                if candidates and candidates[0].account_receivable_id is not None
+                else "Cliente verificado; no tiene una cuenta por cobrar actualmente elegible."
                 if candidates
                 else "La orden no tiene una cuenta por cobrar elegible."
             ),
             candidates=candidates,
-            audit=ToolAuditMetadata(row_count=result.row_count, truncated=result.truncated),
+            limitations=(
+                ["No se verificó una cuenta por cobrar actualmente elegible."]
+                if candidates and candidates[0].account_receivable_id is None
+                else []
+            ),
+            audit=ToolAuditMetadata(
+                row_count=result.row_count + identity_result.row_count,
+                truncated=result.truncated or identity_result.truncated,
+            ),
         )
 
     async def search_vambe_messages(self, request: VambeQuery) -> ToolObservation:

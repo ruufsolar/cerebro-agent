@@ -73,6 +73,11 @@ positive outstanding balance, use CLP in the normal flow, and belong to an activ
 installation. Calculate outstanding as original amount minus registered payments and
 losses. Do not assume every AR is CLP: the currency enum also supports USD and CLF (UF).
 
+If that universe has no defensible candidate but the supplied customer identity is robust and
+unique, Cerebro may identify the customer through booking personal details or a natural-person
+contract signee with medium confidence. It must say that no currently eligible receivable was
+verified and must not relabel a paid, cancelled, wrong-party, or inactive record as collectible.
+
 This is a configurable starting filter, not hidden prompt text. The exact tables and rules
 live in `knowledge/data-scope.yaml` and can be reviewed manually.
 
@@ -81,7 +86,8 @@ live in `knowledge/data-scope.yaml` and can be reviewed manually.
 The reply must include:
 
 - recommended customer and FinOps CRM URL, or an explicit “no encontré un cliente”;
-- one-line human description of the likely AR, never merely its database ID;
+- one-line human description of the likely AR, never merely its database ID, or an explicit note
+  that no currently eligible receivable could be verified;
 - categorical confidence;
 - a concise paragraph explaining what tied the payment to the candidate and what could not
   be verified;

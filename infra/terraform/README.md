@@ -176,7 +176,8 @@ its own managed identity.
 
 The env file must contain the Slack app/bot tokens, Azure OpenAI endpoint/key/deployment,
 and production replica DSN. The script generates a safe Cerebro PostgreSQL password unless
-`CEREBRO_DB_PASSWORD` is exported. It does not print any value.
+one already exists in the vault or `CEREBRO_DB_PASSWORD` is exported. Later rotations reuse
+the existing database password. It does not print any value.
 
 The resulting vault contract is explicit and intentionally small:
 

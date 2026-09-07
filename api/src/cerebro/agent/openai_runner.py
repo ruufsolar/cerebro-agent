@@ -89,6 +89,7 @@ class ToolBudgetExceeded(RuntimeError):
 
 _DIRECT_IDENTITY = {
     EvidenceKind.CUSTOMER_NAME,
+    EvidenceKind.SIGNEE_NAME,
     EvidenceKind.RUT,
     EvidenceKind.EMAIL,
     EvidenceKind.PHONE,
@@ -335,7 +336,7 @@ class OpenAIAgentsRunner:
 
         @function_tool(failure_error_function=None)
         async def search_payment_candidates(request: PaymentCandidateQuery) -> str:
-            """Busca candidatos por glosa, identidad y saldo; no verifica la propuesta final."""
+            """Busca candidatos por glosa, identidad y saldo, incluso identidad sin AR elegible."""
             return await state.invoke(
                 "search_payment_candidates", request, data.search_payment_candidates
             )
@@ -437,6 +438,7 @@ class OpenAIAgentsRunner:
             int(EvidenceKind.EXACT_OUTSTANDING in supporting),
             int(EvidenceKind.VAMBE_CONTEXT in supporting),
             int(EvidenceKind.PARTIAL_ADDRESS in supporting),
+            int(EvidenceKind.NAME_FRAGMENT in supporting),
             int(EvidenceKind.PARTIAL_PAYMENT in supporting),
             -contradiction_count,
         )
@@ -453,6 +455,7 @@ class OpenAIAgentsRunner:
         if EvidenceKind.EXACT_OUTSTANDING in supporting and (
             EvidenceKind.VAMBE_CONTEXT in supporting
             or EvidenceKind.PARTIAL_ADDRESS in supporting
+            or EvidenceKind.NAME_FRAGMENT in supporting
             or bool(supporting & _BANK_IDENTITY)
         ):
             return Confidence.MEDIUM
@@ -544,6 +547,17 @@ class OpenAIAgentsRunner:
             key, verified = match
             signals = self._selected_signals(value, key, state)
             if signals is None:
+                continue
+            supporting = {
+                item.kind for item in signals if item.polarity is EvidencePolarity.SUPPORTING
+            }
+            meaningful = (
+                self._confidence(signals) is not Confidence.UNKNOWN
+                or EvidenceKind.EXACT_OUTSTANDING in supporting
+                or EvidenceKind.EXACT_ADDRESS in supporting
+                or EvidenceKind.PARTIAL_ADDRESS in supporting
+            )
+            if not meaningful:
                 continue
             seen.add(key)
             resolved.append(
@@ -660,6 +674,11 @@ class OpenAIAgentsRunner:
             )
 
         customer = self._customer(output.recommended_customer, verified, grounded)
+        unable_to_verify = self._unable_to_verify(output, state)
+        if verified.account_receivable_id is None:
+            unable_to_verify = list(
+                dict.fromkeys([*unable_to_verify, "cuenta por cobrar elegible"])
+            )[:3]
         return PaymentIdentification(
             outcome=IdentificationOutcome.MATCHED,
             recommended_customer=customer,
@@ -668,7 +687,7 @@ class OpenAIAgentsRunner:
             investigation_summary=self._summary(
                 grounded, "El cliente y la cuenta por cobrar fueron verificados."
             ),
-            unable_to_verify=self._unable_to_verify(output, state),
+            unable_to_verify=unable_to_verify,
             evidence=grounded,
         )
 
