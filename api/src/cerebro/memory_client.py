@@ -105,6 +105,10 @@ class Credentials:
     client_id: str = ""
     client_secret: str = ""
     token_url: str = DEFAULT_TOKEN_URL
+    scope: str = ""
+    """Sent with the client-credentials request when set. Authentik does not need
+    one for this — the token is a JWT either way — but a provider configured to
+    demand a scope would otherwise fail in a way that looks like a bad secret."""
     static_token: str = ""
 
     @classmethod
@@ -129,6 +133,7 @@ class Credentials:
             client_id=client_id,
             client_secret=client_secret,
             token_url=(source.get("RUUF_AGENTS_TOKEN_URL") or DEFAULT_TOKEN_URL).strip(),
+            scope=(source.get("RUUF_AGENTS_M2M_SCOPE") or "").strip(),
             static_token=static_token,
         )
 
@@ -261,11 +266,7 @@ class MemoryClient:
         try:
             response = self._client.post(
                 self.credentials.token_url,
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": self.credentials.client_id,
-                    "client_secret": self.credentials.client_secret,
-                },
+                data=_client_credentials(self.credentials),
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -373,11 +374,7 @@ class AsyncMemoryClient:
         try:
             response = await self._client.post(
                 self.credentials.token_url,
-                data={
-                    "grant_type": "client_credentials",
-                    "client_id": self.credentials.client_id,
-                    "client_secret": self.credentials.client_secret,
-                },
+                data=_client_credentials(self.credentials),
             )
             response.raise_for_status()
         except httpx.HTTPError as exc:
@@ -385,6 +382,15 @@ class AsyncMemoryClient:
             return None
         self._token = _token_from(response.json())
         return self._token.value or None
+
+
+def _client_credentials(credentials: Credentials) -> dict[str, str]:
+    grant = {
+        "grant_type": "client_credentials",
+        "client_id": credentials.client_id,
+        "client_secret": credentials.client_secret,
+    }
+    return {**grant, "scope": credentials.scope} if credentials.scope else grant
 
 
 def _brief_from(body: dict[str, Any] | None) -> Brief:
