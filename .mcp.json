@@ -2,7 +2,7 @@
   "mcpServers": {
     "ruuf-agents": {
       "type": "http",
-      "url": "${RUUF_AGENTS_MCP_URL:-https://ruuf-prs.centralus.cloudapp.azure.com/mcp}",
+      "url": "${RUUF_AGENTS_MCP_URL:-https://agents.ruuf.solar/mcp}",
       "headers": {
         "Authorization": "Bearer ${RUUF_AGENTS_TOKEN}"
       }

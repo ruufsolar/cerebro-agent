@@ -3,5 +3,5 @@
 #
 # Set RUUF_AGENTS_TOKEN to your Authentik personal access token.
 [mcp_servers.ruuf-agents]
-url = "https://ruuf-prs.centralus.cloudapp.azure.com/mcp"
+url = "https://agents.ruuf.solar/mcp"
 bearer_token_env_var = "RUUF_AGENTS_TOKEN"
