@@ -2,6 +2,11 @@
 
 ## Before changing code
 
+- Call `agents_for_paths` on the files you are about to touch, and `agent_brief cerebro`
+  before you read the code: what ops taught Cerebro in Slack is in the shared store and
+  not in this repository. `remember` what you work out when you are done — one thing per
+  call, never a client's name, RUT, phone or email. `.claude/skills/agent-memory/SKILL.md`
+  has the longer version; the tools need `RUUF_AGENTS_TOKEN` in your environment.
 - Read `docs/README.md`, `docs/product/current-state.md`, and
   `docs/product/capability-matrix.md`.
 - Read the ADRs relevant to the area you are changing. Architectural decisions must be

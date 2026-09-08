@@ -22,6 +22,7 @@ from agents.models.openai_responses import OpenAIResponsesModel
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
+from cerebro.agent import shared_memory
 from cerebro.agent.data_tools import (
     EmptyInvestigationData,
     InvestigationCandidate,
@@ -30,6 +31,7 @@ from cerebro.agent.data_tools import (
     PaymentCandidateQuery,
     ReadonlySqlQuery,
     SchemaQuery,
+    SharedMemoryNote,
     ToolObservation,
     ToolRequest,
     VambeQuery,
@@ -364,6 +366,24 @@ class OpenAIAgentsRunner:
             return await state.invoke("run_readonly_sql", request, data.run_readonly_sql)
 
         return [read_finops_knowledge, describe_database_tables, run_readonly_sql]
+
+    def _memory_tools(self, state: RunState) -> list[Any]:
+        """The one tool that writes, and only in the general flow.
+
+        The payment-identification flow returns a structured identification
+        under a versioned policy; a model that can also write to a store other
+        agents read is a second thing to reason about in the middle of that, for
+        no benefit. Ops teach Cerebro in conversation, which is this flow.
+        """
+        if shared_memory.client() is None:
+            return []
+
+        @function_tool(failure_error_function=None)
+        async def remember_shared_memory(request: SharedMemoryNote) -> str:
+            """Guarda un aprendizaje no obvio y duradero en la memoria compartida de RUUF."""
+            return await state.invoke("remember_shared_memory", request, shared_memory.remember)
+
+        return [remember_shared_memory]
 
     def _payment_tools(self, state: RunState) -> list[Any]:
         data = self.data
@@ -908,7 +928,7 @@ class OpenAIAgentsRunner:
                 max_tokens=min(self.config.azure_max_output_tokens, 1_024),
             ),
             output_type=GeneralAnswer,
-            tools=self._generic_tools(state),
+            tools=[*self._generic_tools(state), *self._memory_tools(state)],
         )
         fallback: tuple[str, CompletionReason] | None = None
         sdk_result: Any | None = None
@@ -1000,6 +1020,13 @@ class OpenAIAgentsRunner:
             async with asyncio.timeout(self.config.agent_timeout_seconds):
                 request_kind, router_usage, route_step = await self._route(items)
                 if request_kind is RequestKind.GENERAL:
+                    # Above the prompt rather than inside it, and only here: the
+                    # payment flow answers under a versioned policy and gains
+                    # nothing from what ops said in another thread last week.
+                    memory = await shared_memory.load()
+                    if memory is not None:
+                        general_instructions = f"{memory.text}\n\n{general_instructions}"
+                        general_knowledge = f"{general_knowledge}+{memory.version}"
                     result: RunnerResult = await self._run_general(
                         items, state, general_instructions
                     )
