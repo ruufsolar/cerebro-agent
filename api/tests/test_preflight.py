@@ -78,7 +78,7 @@ async def test_preflight_fails_an_enabled_ingress_that_cannot_validate_tokens(
 async def test_preflight_reads_the_authentik_key_set(monkeypatch) -> None:
     config = AppConfig(
         bank_ingestion_enabled=True,
-        bank_ingestion_issuer="https://auth.ruuf.solar/application/o/cerebro/",
+        bank_ingestion_issuer="https://auth.ruuf.solar/application/o/monolith/",
         bank_ingestion_audience="cerebro-bank-movements",
         bank_ingestion_client_id="monolith-bank-movements",
     )
@@ -91,13 +91,13 @@ async def test_preflight_reads_the_authentik_key_set(monkeypatch) -> None:
     _serve_jwks(monkeypatch, handler)
 
     assert await preflight._bank_ingestion_check(config) == "ok"
-    assert requested == ["https://auth.ruuf.solar/application/o/cerebro/jwks/"]
+    assert requested == ["https://auth.ruuf.solar/application/o/monolith/jwks/"]
 
 
 async def test_preflight_reports_an_unusable_key_set(monkeypatch) -> None:
     config = AppConfig(
         bank_ingestion_enabled=True,
-        bank_ingestion_issuer="https://auth.ruuf.solar/application/o/cerebro/",
+        bank_ingestion_issuer="https://auth.ruuf.solar/application/o/monolith/",
         bank_ingestion_audience="cerebro-bank-movements",
         bank_ingestion_client_id="monolith-bank-movements",
     )

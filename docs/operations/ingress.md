@@ -56,16 +56,18 @@ the client id is how Cerebro decides who is allowed to post payments.
 
 | Value | Cerebro setting | Note |
 |---|---|---|
-| Issuer | `CEREBRO_BANK_INGESTION_ISSUER` | Authentik's `iss`, the provider URL with its trailing slash, e.g. `https://auth.ruuf.solar/application/o/cerebro/` |
+| Issuer | `CEREBRO_BANK_INGESTION_ISSUER` | Authentik's `iss`, the provider URL with its trailing slash, e.g. `https://auth.ruuf.solar/application/o/<slug>/` |
 | Audience | `CEREBRO_BANK_INGESTION_AUDIENCE` | what the token's `aud` actually carries |
 | Client id | `CEREBRO_BANK_INGESTION_CLIENT_ID` | the monolith's client, matched against `azp` |
 
 Two things to confirm rather than assume, because Authentik can be configured either way and
 guessing produces a token that validates in staging and is refused in production:
 
-- **Issuer mode.** Per-provider (the default) makes `iss` end in the application slug;
-  global mode makes every provider share one issuer. Whichever it is, the value Cerebro
-  compares against must be copied from a real token, not constructed.
+- **Issuer mode, and whose slug it is.** Per-provider (the default) makes `iss` end in the
+  slug of the provider that *minted* the token — the monolith's, not Cerebro's, because the
+  monolith is the one calling. Global mode makes every provider share one issuer. Either
+  way the value Cerebro compares against is copied from a real token, never constructed
+  from Cerebro's own name.
 - **What `aud` holds.** In Authentik's default per-provider mode a client-credentials token
   carries the requesting client's own id in `aud`, so the audience and the client id may be
   the same string. That is fine. What matters is that both are checked.
@@ -115,7 +117,7 @@ dig +short cerebro.ruuf.cl
 # 3. The runtime configuration. Add to the approved .env:
 #      CEREBRO_PUBLIC_HOSTNAME=cerebro.ruuf.cl
 #      CEREBRO_ACME_EMAIL=<a mailbox the CA can reach>
-#      CEREBRO_BANK_INGESTION_ISSUER=https://auth.ruuf.solar/application/o/cerebro/
+#      CEREBRO_BANK_INGESTION_ISSUER=<the iss from the decoded token, trailing slash included>
 #      CEREBRO_BANK_INGESTION_AUDIENCE=<from the decoded token>
 #      CEREBRO_BANK_INGESTION_CLIENT_ID=<the monolith's client>
 #    The seeder refuses a hostname without all four of the others.

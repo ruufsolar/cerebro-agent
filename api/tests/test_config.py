@@ -89,19 +89,21 @@ def test_bank_ingestion_is_off_by_default() -> None:
 def test_bank_ingestion_derives_the_authentik_key_set_from_the_issuer() -> None:
     config = AppConfig(
         bank_ingestion_enabled=True,
-        bank_ingestion_issuer="https://auth.ruuf.solar/application/o/cerebro/",
+        bank_ingestion_issuer="https://auth.ruuf.solar/application/o/monolith/",
         bank_ingestion_audience="cerebro-bank-movements",
         bank_ingestion_client_id="monolith-bank-movements",
     )
 
-    assert config.bank_ingestion_jwks_uri == ("https://auth.ruuf.solar/application/o/cerebro/jwks/")
+    assert config.bank_ingestion_jwks_uri == (
+        "https://auth.ruuf.solar/application/o/monolith/jwks/"
+    )
     assert config.bank_ingestion_ready is True
 
 
 def test_bank_ingestion_key_set_can_be_overridden() -> None:
     config = AppConfig(
         bank_ingestion_enabled=True,
-        bank_ingestion_issuer="https://auth.ruuf.solar/application/o/cerebro/",
+        bank_ingestion_issuer="https://auth.ruuf.solar/application/o/monolith/",
         bank_ingestion_audience="cerebro-bank-movements",
         bank_ingestion_client_id="monolith-bank-movements",
         bank_ingestion_jwks_url="https://auth.ruuf.solar/keys.json",
@@ -115,7 +117,7 @@ def test_bank_ingestion_is_not_ready_without_something_to_validate_against() -> 
     no issuer, audience, or authorized client would be an unauthenticated payment endpoint."""
     complete = {
         "bank_ingestion_enabled": True,
-        "bank_ingestion_issuer": "https://auth.ruuf.solar/application/o/cerebro/",
+        "bank_ingestion_issuer": "https://auth.ruuf.solar/application/o/monolith/",
         "bank_ingestion_audience": "cerebro-bank-movements",
         "bank_ingestion_client_id": "monolith-bank-movements",
     }

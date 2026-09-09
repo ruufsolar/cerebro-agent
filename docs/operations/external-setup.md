@@ -92,7 +92,8 @@ Cerebro stays private, with Slack as its only trigger.
    (`https://auth.ruuf.solar/application/o/token/`, `grant_type=client_credentials`), decode
    it, and report `iss`, `aud`, and `azp` as non-secret metadata. Do not send the token
    itself. Copy those three values rather than constructing them: Authentik's issuer mode
-   and audience contents are per-installation choices.
+   and audience contents are per-installation choices, and in the default per-provider mode
+   `iss` names the monolith's provider, not Cerebro's.
 3. Record them as `CEREBRO_BANK_INGESTION_ISSUER`, `CEREBRO_BANK_INGESTION_AUDIENCE`, and
    `CEREBRO_BANK_INGESTION_CLIENT_ID`.
 4. Ask the owner of the `ruuf.cl` zone to create `A cerebro.ruuf.cl` pointing at the address
