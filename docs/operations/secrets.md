@@ -11,6 +11,9 @@
 | `CEREBRO_AZURE_OPENAI_API_KEY` | 2 | Yes | Initial Azure auth |
 | `CEREBRO_AZURE_DEPLOYMENT_MAIN` | 2 | No | Exact Azure deployment name |
 | `CEREBRO_READ_REPLICA_URL` | 3 | Yes | Dedicated read-only monolith replica |
+| `RUUF_AGENTS_URL` | memory | No | The shared memory of Ruuf's agents; unset leaves the bridge off |
+| `RUUF_AGENTS_M2M_CLIENT_ID` | memory | No | Cerebro's Authentik M2M client (`agents-cerebro`) |
+| `RUUF_AGENTS_M2M_CLIENT_SECRET` | memory | Yes | Its client secret; never in the platform's config |
 
 *The endpoint is not a credential but keep environment topology within normal internal
 configuration channels.

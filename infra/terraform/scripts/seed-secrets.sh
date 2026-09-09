@@ -13,6 +13,9 @@ The VM pulls images with its managed identity, so no registry credential is seed
 --mode and --image-tag likewise default to the vault's current values, so a reseed to rotate
 a credential never changes what production runs. On the first seed they default to "off"
 and "main". Pass them explicitly to change mode or deploy a different image.
+The shared memory of Ruuf's agents (RUUF_AGENTS_*) is seeded only when the env file has a
+RUUF_AGENTS_URL line: a URL turns the bridge on and needs the M2M client id and secret next
+to it; an empty value turns it off; no line at all leaves the vault as it is.
 EOF
 }
 
@@ -80,6 +83,10 @@ env_value() {
   printf '%s' "$value"
 }
 
+env_has_key() {
+  grep -q -E "^$1=" "$ENV_FILE"
+}
+
 require_value() {
   local name=$1
   local value=$2
@@ -95,6 +102,27 @@ AZURE_OPENAI_ENDPOINT=$(env_value CEREBRO_AZURE_OPENAI_ENDPOINT)
 AZURE_OPENAI_API_KEY=$(env_value CEREBRO_AZURE_OPENAI_API_KEY)
 AZURE_DEPLOYMENT_MAIN=$(env_value CEREBRO_AZURE_DEPLOYMENT_MAIN)
 READ_REPLICA_URL=$(env_value CEREBRO_READ_REPLICA_URL)
+# The shared memory of Ruuf's agents (ruufsolar/gru). Key Vault cannot hold an empty
+# value, so "none" stands for one: a URL of "none" means the bridge is off, and a scope of
+# "none" means the client sends no scope. Without a RUUF_AGENTS_URL line in the env file
+# nothing here is touched, so a reseed to rotate a Slack token never changes the bridge.
+SEED_RUUF_AGENTS=false
+RUUF_AGENTS_URL=none
+RUUF_AGENTS_M2M_CLIENT_ID=
+RUUF_AGENTS_M2M_CLIENT_SECRET=
+RUUF_AGENTS_M2M_SCOPE=none
+if env_has_key RUUF_AGENTS_URL; then
+  SEED_RUUF_AGENTS=true
+  RUUF_AGENTS_URL=$(env_value RUUF_AGENTS_URL)
+  if [ -n "$RUUF_AGENTS_URL" ]; then
+    RUUF_AGENTS_M2M_CLIENT_ID=$(env_value RUUF_AGENTS_M2M_CLIENT_ID)
+    RUUF_AGENTS_M2M_CLIENT_SECRET=$(env_value RUUF_AGENTS_M2M_CLIENT_SECRET)
+    RUUF_AGENTS_M2M_SCOPE=$(env_value RUUF_AGENTS_M2M_SCOPE)
+    [ -n "$RUUF_AGENTS_M2M_SCOPE" ] || RUUF_AGENTS_M2M_SCOPE=none
+  else
+    RUUF_AGENTS_URL=none
+  fi
+fi
 # The local PostgreSQL keeps whatever password it was initialised with on the retained data
 # disk, so a reseed must reuse the current vault value. Generate a new password only when the
 # vault has none yet, or when the operator explicitly overrides it.
@@ -117,6 +145,15 @@ require_value CEREBRO_AZURE_OPENAI_ENDPOINT "$AZURE_OPENAI_ENDPOINT"
 require_value CEREBRO_AZURE_OPENAI_API_KEY "$AZURE_OPENAI_API_KEY"
 require_value CEREBRO_AZURE_DEPLOYMENT_MAIN "$AZURE_DEPLOYMENT_MAIN"
 require_value CEREBRO_READ_REPLICA_URL "$READ_REPLICA_URL"
+if [ "$RUUF_AGENTS_URL" != none ]; then
+  [[ "$RUUF_AGENTS_URL" =~ ^https://[^[:space:]/]+$ ]] || {
+    echo "RUUF_AGENTS_URL must be https://<host> with no path" >&2
+    exit 2
+  }
+  require_value RUUF_AGENTS_M2M_CLIENT_ID "$RUUF_AGENTS_M2M_CLIENT_ID"
+  require_value RUUF_AGENTS_M2M_CLIENT_SECRET "$RUUF_AGENTS_M2M_CLIENT_SECRET"
+  require_value RUUF_AGENTS_M2M_SCOPE "$RUUF_AGENTS_M2M_SCOPE"
+fi
 [[ "$DB_PASSWORD" =~ ^[A-Za-z0-9]+$ ]] || {
   echo "CEREBRO_DB_PASSWORD must be alphanumeric so the internal DSN remains unambiguous" >&2
   exit 2
@@ -152,6 +189,21 @@ put_secret read-replica-url "$READ_REPLICA_URL"
 put_secret cerebro-db-password "$DB_PASSWORD"
 put_secret global-mode "$GLOBAL_MODE"
 put_secret image-tag "$IMAGE_TAG"
+if [ "$SEED_RUUF_AGENTS" = true ]; then
+  put_secret ruuf-agents-url "$RUUF_AGENTS_URL"
+  if [ "$RUUF_AGENTS_URL" != none ]; then
+    put_secret ruuf-agents-m2m-client-id "$RUUF_AGENTS_M2M_CLIENT_ID"
+    put_secret ruuf-agents-m2m-client-secret "$RUUF_AGENTS_M2M_CLIENT_SECRET"
+    put_secret ruuf-agents-m2m-scope "$RUUF_AGENTS_M2M_SCOPE"
+  fi
+fi
 
 echo "Required Cerebro secrets were seeded without printing their values."
+if [ "$SEED_RUUF_AGENTS" = true ]; then
+  if [ "$RUUF_AGENTS_URL" != none ]; then
+    echo "The shared memory of Ruuf's agents is on, at $RUUF_AGENTS_URL."
+  else
+    echo "The shared memory of Ruuf's agents is off."
+  fi
+fi
 echo "Production mode is '$GLOBAL_MODE'. Run scripts/activate.sh when the replica firewall is ready."
