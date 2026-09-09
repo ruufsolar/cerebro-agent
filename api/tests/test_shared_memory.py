@@ -6,6 +6,8 @@ back — including the two answers that matter most: nothing configured, and a
 platform that is not answering.
 """
 
+from typing import get_args
+
 import httpx
 import pytest
 
@@ -61,7 +63,9 @@ class TestWithoutTheStore:
         )
         observation = await shared_memory.remember(SharedMemoryNote(content="Algo aprendido hoy"))
         assert observation.available is False
-        assert "no respondió" in observation.summary
+        # What the tool knows is that nothing was stored. Why is the client's
+        # log line, not a cause to guess at in front of ops.
+        assert "no quedó guardado" in observation.summary
 
 
 class TestTheBlockAboveThePrompt:
@@ -129,6 +133,15 @@ class TestWriting:
 
         assert observation.available is True
         assert "[correo]" in observation.summary
+
+    def test_the_kinds_offered_are_the_kinds_the_platform_stores(self) -> None:
+        # `MemoryKind` in ruufsolar/gru. Offering a fourth kind here is a 422 the
+        # model cannot see: the write is refused and the learning is lost.
+        assert get_args(SharedMemoryNote.model_fields["kind"].annotation) == (
+            "fact",
+            "procedure",
+            "rule",
+        )
 
     async def test_the_audit_row_records_the_shape_and_not_the_memory(self) -> None:
         # The content is already in the store; an audit row does not need a

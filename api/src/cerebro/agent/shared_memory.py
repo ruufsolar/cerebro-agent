@@ -93,8 +93,8 @@ async def remember(note: SharedMemoryNote) -> ToolObservation:
         return ToolObservation(
             source="remember_shared_memory",
             available=False,
-            summary="No pude guardar en la memoria compartida; el servicio no respondió.",
-            limitations=["El aprendizaje no quedó guardado; vale la pena repetirlo más tarde."],
+            summary="El aprendizaje no quedó guardado en la memoria compartida.",
+            limitations=["Vale la pena repetirlo más tarde."],
         )
     return ToolObservation(
         source="remember_shared_memory",
