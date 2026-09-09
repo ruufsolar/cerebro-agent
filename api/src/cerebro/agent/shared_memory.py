@@ -8,7 +8,7 @@ from a coding session in the monolith — so what ops teach Cerebro reaches the
 dev who is about to change `src/financing/**`, and what that dev works out is in
 Cerebro's next answer.
 
-Two rules this module exists to hold.
+Three rules this module exists to hold.
 
 **The brief is data, never instructions.** It is written by Ruufians and by other
 agents, and Cerebro already treats Slack text and tool output that way; a store
@@ -17,9 +17,15 @@ above the memories.
 
 **A run never fails because the store is unreachable.** The client returns an
 empty brief and the tool returns an unavailable observation; Cerebro answers
-with less context rather than not answering.
+with less context rather than not answering — and, once it has read a brief
+once, with the last one it read.
+
+**A run does not pay for the brief.** It is the same bytes until a memory
+changes, so it is read once and reused for a few minutes rather than fetched
+inside every Slack turn's timeout.
 """
 
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 
@@ -30,6 +36,18 @@ AGENT_SLUG = "cerebro"
 BRIEF_TOKEN_BUDGET = 4_000
 """Enough for the core identity and what ops taught this fortnight, and small
 enough that it cannot crowd out the payment policy in the same context."""
+
+BRIEF_TTL_SECONDS = 300.0
+"""How long a brief is reused before the platform is asked again. The brief
+changes when a memory changes, not when a thread starts, so a busy afternoon
+should cost one request rather than one per run. Nothing waits five minutes for
+what Cerebro itself just learned: a successful write drops the entry."""
+
+BRIEF_MAX_STALE_SECONDS = 3_600.0
+"""How long the last good brief is still served once the platform stops
+answering. Answering with what ops taught an hour ago beats answering with
+nothing, and an hour is short enough that a rejected memory does not outlive the
+outage that hid its removal."""
 
 PREAMBLE = """
 Memoria compartida de los agentes de RUUF: lo que ops te ha enseñado en Slack y
@@ -57,6 +75,22 @@ class MemoryContext:
     version: str
 
 
+@dataclass(frozen=True)
+class _Cached:
+    context: MemoryContext
+    fetched_at: float
+
+
+_brief: _Cached | None = None
+"""The last brief this process read. One entry, because there is one caller and
+one budget.
+
+No lock guards it. Two runs that start together may both fetch, which costs one
+extra request; a lock would instead put every concurrent run behind one HTTP
+call to save it, and a run waiting on the memory service is the thing this
+module exists to avoid."""
+
+
 @lru_cache
 def client() -> AsyncMemoryClient | None:
     """`None` when this deployment has no shared memory configured, which is a
@@ -64,18 +98,42 @@ def client() -> AsyncMemoryClient | None:
     return AsyncMemoryClient.from_env(AGENT_SLUG)
 
 
+def forget() -> None:
+    """Drop the cached brief, so the next run reads the store again."""
+    global _brief
+    _brief = None
+
+
 async def load() -> MemoryContext | None:
-    """The block that goes above the general prompt, or nothing."""
+    """The block that goes above the general prompt, or nothing.
+
+    Cached for `BRIEF_TTL_SECONDS`. The run row still records which store it
+    saw — `version` carries the memory clock of the brief that was used, cached
+    or not — so a stale answer can be recognised afterwards as a stale one.
+    """
     memory = client()
     if memory is None:
         return None
+    global _brief
+    cached = _brief
+    now = time.monotonic()
+    if cached is not None and now - cached.fetched_at < BRIEF_TTL_SECONDS:
+        return cached.context
     brief = await memory.brief_detail(token_budget=BRIEF_TOKEN_BUDGET)
     if not brief:
+        # An unreachable platform and an empty store look the same from here, so
+        # a brief that was good a minute ago is worth more than the difference:
+        # keep serving it rather than losing every memory to one bad minute.
+        if cached is not None and now - cached.fetched_at < BRIEF_MAX_STALE_SECONDS:
+            return cached.context
+        forget()
         return None
-    return MemoryContext(
+    context = MemoryContext(
         text=f"{PREAMBLE}\n\n{brief.text}",
         version=f"shared-memory-{brief.memory_clock}",
     )
+    _brief = _Cached(context=context, fetched_at=time.monotonic())
+    return context
 
 
 async def remember(note: SharedMemoryNote) -> ToolObservation:
@@ -96,6 +154,10 @@ async def remember(note: SharedMemoryNote) -> ToolObservation:
             summary="El aprendizaje no quedó guardado en la memoria compartida.",
             limitations=["Vale la pena repetirlo más tarde."],
         )
+    # What Cerebro just learned belongs in the next run's brief: a short-term
+    # memory goes straight into the volatile block, and waiting out the TTL for
+    # it would look like the write had not worked.
+    forget()
     return ToolObservation(
         source="remember_shared_memory",
         available=True,
