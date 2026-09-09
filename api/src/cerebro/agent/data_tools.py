@@ -142,7 +142,10 @@ class SharedMemoryNote(BaseModel):
     """
 
     content: str = Field(min_length=8, max_length=1_500)
-    kind: Literal["fact", "procedure", "preference", "rule"] = "fact"
+    kind: Literal["fact", "procedure", "rule"] = "fact"
+    """Exactly the platform's `MemoryKind`. A kind it does not know is a 422 the
+    model cannot see and cannot retry its way out of, so the choice offered here
+    is the choice the store accepts."""
     topic: str | None = Field(default=None, max_length=80)
 
 
