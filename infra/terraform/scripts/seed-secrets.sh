@@ -16,6 +16,10 @@ and "main". Pass them explicitly to change mode or deploy a different image.
 The shared memory of Ruuf's agents (RUUF_AGENTS_*) is seeded only when the env file has a
 RUUF_AGENTS_URL line: a URL turns the bridge on and needs the M2M client id and secret next
 to it; an empty value turns it off; no line at all leaves the vault as it is.
+The public HTTPS ingress works the same way, keyed on CEREBRO_PUBLIC_HOSTNAME: a hostname
+turns it on and requires the ACME contact address and the Authentik issuer, audience, and
+authorized monolith client id next to it, because a public endpoint whose token cannot be
+validated must never exist; an empty value turns the ingress off and leaves Cerebro private.
 EOF
 }
 
@@ -123,6 +127,28 @@ if env_has_key RUUF_AGENTS_URL; then
     RUUF_AGENTS_URL=none
   fi
 fi
+# Public HTTPS ingress for the monolith's bank-payment events. Same convention as above:
+# "none" stands for the empty value Key Vault cannot store, and a file with no
+# CEREBRO_PUBLIC_HOSTNAME line leaves the vault's current ingress configuration alone.
+SEED_INGRESS=false
+PUBLIC_HOSTNAME=none
+ACME_CONTACT_EMAIL=
+BANK_INGESTION_ISSUER=
+BANK_INGESTION_AUDIENCE=
+BANK_INGESTION_CLIENT_ID=
+if env_has_key CEREBRO_PUBLIC_HOSTNAME; then
+  SEED_INGRESS=true
+  PUBLIC_HOSTNAME=$(env_value CEREBRO_PUBLIC_HOSTNAME)
+  if [ -n "$PUBLIC_HOSTNAME" ]; then
+    ACME_CONTACT_EMAIL=$(env_value CEREBRO_ACME_EMAIL)
+    BANK_INGESTION_ISSUER=$(env_value CEREBRO_BANK_INGESTION_ISSUER)
+    BANK_INGESTION_AUDIENCE=$(env_value CEREBRO_BANK_INGESTION_AUDIENCE)
+    BANK_INGESTION_CLIENT_ID=$(env_value CEREBRO_BANK_INGESTION_CLIENT_ID)
+  else
+    PUBLIC_HOSTNAME=none
+  fi
+fi
+
 # The local PostgreSQL keeps whatever password it was initialised with on the retained data
 # disk, so a reseed must reuse the current vault value. Generate a new password only when the
 # vault has none yet, or when the operator explicitly overrides it.
@@ -153,6 +179,23 @@ if [ "$RUUF_AGENTS_URL" != none ]; then
   require_value RUUF_AGENTS_M2M_CLIENT_ID "$RUUF_AGENTS_M2M_CLIENT_ID"
   require_value RUUF_AGENTS_M2M_CLIENT_SECRET "$RUUF_AGENTS_M2M_CLIENT_SECRET"
   require_value RUUF_AGENTS_M2M_SCOPE "$RUUF_AGENTS_M2M_SCOPE"
+fi
+if [ "$PUBLIC_HOSTNAME" != none ]; then
+  [[ "$PUBLIC_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || {
+    echo "CEREBRO_PUBLIC_HOSTNAME must be a lowercase fully qualified domain name" >&2
+    exit 2
+  }
+  [[ "$ACME_CONTACT_EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || {
+    echo "CEREBRO_ACME_EMAIL must be an address the certificate authority can reach" >&2
+    exit 2
+  }
+  # Authentik's "iss" is the provider URL and ends in a slash; Cerebro compares it exactly.
+  [[ "$BANK_INGESTION_ISSUER" =~ ^https://[^[:space:]]+/$ ]] || {
+    echo "CEREBRO_BANK_INGESTION_ISSUER must be an https URL ending in /" >&2
+    exit 2
+  }
+  require_value CEREBRO_BANK_INGESTION_AUDIENCE "$BANK_INGESTION_AUDIENCE"
+  require_value CEREBRO_BANK_INGESTION_CLIENT_ID "$BANK_INGESTION_CLIENT_ID"
 fi
 [[ "$DB_PASSWORD" =~ ^[A-Za-z0-9]+$ ]] || {
   echo "CEREBRO_DB_PASSWORD must be alphanumeric so the internal DSN remains unambiguous" >&2
@@ -189,6 +232,15 @@ put_secret read-replica-url "$READ_REPLICA_URL"
 put_secret cerebro-db-password "$DB_PASSWORD"
 put_secret global-mode "$GLOBAL_MODE"
 put_secret image-tag "$IMAGE_TAG"
+if [ "$SEED_INGRESS" = true ]; then
+  put_secret public-hostname "$PUBLIC_HOSTNAME"
+  if [ "$PUBLIC_HOSTNAME" != none ]; then
+    put_secret acme-contact-email "$ACME_CONTACT_EMAIL"
+    put_secret bank-ingestion-issuer "$BANK_INGESTION_ISSUER"
+    put_secret bank-ingestion-audience "$BANK_INGESTION_AUDIENCE"
+    put_secret bank-ingestion-client-id "$BANK_INGESTION_CLIENT_ID"
+  fi
+fi
 if [ "$SEED_RUUF_AGENTS" = true ]; then
   put_secret ruuf-agents-url "$RUUF_AGENTS_URL"
   if [ "$RUUF_AGENTS_URL" != none ]; then
@@ -204,6 +256,13 @@ if [ "$SEED_RUUF_AGENTS" = true ]; then
     echo "The shared memory of Ruuf's agents is on, at $RUUF_AGENTS_URL."
   else
     echo "The shared memory of Ruuf's agents is off."
+  fi
+fi
+if [ "$SEED_INGRESS" = true ]; then
+  if [ "$PUBLIC_HOSTNAME" != none ]; then
+    echo "Public ingress is on, at https://$PUBLIC_HOSTNAME."
+  else
+    echo "Public ingress is off; Cerebro keeps no public listener."
   fi
 fi
 echo "Production mode is '$GLOBAL_MODE'. Run scripts/activate.sh when the replica firewall is ready."

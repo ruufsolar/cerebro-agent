@@ -76,3 +76,50 @@ def test_database_driver_urls_are_derived() -> None:
 
     assert config.sqlalchemy_url.startswith("postgresql+asyncpg://")
     assert config.alembic_url.startswith("postgresql+psycopg://")
+
+
+def test_bank_ingestion_is_off_by_default() -> None:
+    config = AppConfig()
+
+    assert config.bank_ingestion_enabled is False
+    assert config.bank_ingestion_ready is False
+    assert config.bank_ingestion_jwks_uri == ""
+
+
+def test_bank_ingestion_derives_the_authentik_key_set_from_the_issuer() -> None:
+    config = AppConfig(
+        bank_ingestion_enabled=True,
+        bank_ingestion_issuer="https://auth.ruuf.solar/application/o/cerebro/",
+        bank_ingestion_audience="cerebro-bank-movements",
+        bank_ingestion_client_id="monolith-bank-movements",
+    )
+
+    assert config.bank_ingestion_jwks_uri == ("https://auth.ruuf.solar/application/o/cerebro/jwks/")
+    assert config.bank_ingestion_ready is True
+
+
+def test_bank_ingestion_key_set_can_be_overridden() -> None:
+    config = AppConfig(
+        bank_ingestion_enabled=True,
+        bank_ingestion_issuer="https://auth.ruuf.solar/application/o/cerebro/",
+        bank_ingestion_audience="cerebro-bank-movements",
+        bank_ingestion_client_id="monolith-bank-movements",
+        bank_ingestion_jwks_url="https://auth.ruuf.solar/keys.json",
+    )
+
+    assert config.bank_ingestion_jwks_uri == "https://auth.ruuf.solar/keys.json"
+
+
+def test_bank_ingestion_is_not_ready_without_something_to_validate_against() -> None:
+    """The enabled flag alone must never be enough: an endpoint that served requests with
+    no issuer, audience, or authorized client would be an unauthenticated payment endpoint."""
+    complete = {
+        "bank_ingestion_enabled": True,
+        "bank_ingestion_issuer": "https://auth.ruuf.solar/application/o/cerebro/",
+        "bank_ingestion_audience": "cerebro-bank-movements",
+        "bank_ingestion_client_id": "monolith-bank-movements",
+    }
+
+    assert AppConfig(**complete).bank_ingestion_ready is True
+    for missing in ("bank_ingestion_issuer", "bank_ingestion_audience", "bank_ingestion_client_id"):
+        assert AppConfig(**{**complete, missing: ""}).bank_ingestion_ready is False

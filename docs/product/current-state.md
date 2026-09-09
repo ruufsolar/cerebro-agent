@@ -1,6 +1,6 @@
 # Current state
 
-Last updated: 2026-09-07.
+Last updated: 2026-09-09.
 
 ## Completed in code: Phase 0 through Slice 6B conversational routing
 
@@ -105,11 +105,21 @@ Last updated: 2026-09-07.
   explicit stable NAT egress, retained data disk, Key Vault/managed-identity secret delivery,
   and remote Entra-authenticated state. It has not been applied by this repository change;
   capability remains preview and production mode defaults to `off`.
+- Optional public HTTPS ingress for the monolith's bank-payment events: a static address,
+  `cerebro.ruuf.cl`, a Caddy proxy that issues and renews its own certificate, and inbound
+  rules for TCP 443 from approved sources and TCP 80 for renewal only. It routes exactly
+  `POST /integrations/bank-movements` to the web service and answers 404 everywhere else;
+  `/health`, `/ready`, PostgreSQL, the workers, and SSH keep no public route. The whole path
+  is off unless a public hostname is configured, and the secret seeder refuses a hostname
+  without the Authentik issuer, audience, and authorized client id beside it. Settings and a
+  key-set preflight check exist for the application's token validation.
 
 ## Deliberately not connected
 
 - PostHog, external dashboards, and external alert sinks in V0.
-- Any automatic bank trigger.
+- The `POST /integrations/bank-movements` endpoint itself. The network path, the
+  certificate, and the Authentik configuration exist; the route, its token validation, its
+  persistence, and its queueing are a separate change, so nothing accepts a bank event yet.
 - Any monolith write API.
 
 ## Slice 5 acceptance status

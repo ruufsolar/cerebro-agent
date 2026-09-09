@@ -1,8 +1,9 @@
 # Runbook
 
-For the Terraform-provisioned private VM, run these commands through Azure Run Command as
-shown in the [Azure production guide](../../infra/terraform/README.md). Do not add a public
-IP or inbound SSH rule for routine operations.
+For the Terraform-provisioned VM, run these commands through Azure Run Command as
+shown in the [Azure production guide](../../infra/terraform/README.md). Do not add an
+inbound SSH rule, or any inbound rule beyond the reviewed bank-movements ingress, for
+routine operations.
 
 ## Basic checks
 
@@ -14,6 +15,38 @@ docker compose -f /etc/cerebro-agent/compose.yml --env-file /etc/cerebro-agent/c
 systemctl status cerebro-agent-update.timer cerebro-agent-backup.timer
 cd /app/api && python -m cerebro.ops.status --hours 24
 ```
+
+## The bank-movements endpoint is refusing the monolith
+
+Only on a deployment with a public ingress. Work outward, and do not ask for a copy of the
+token to reproduce with: everything below is diagnosable without one.
+
+```bash
+# Is the proxy even running, and did it get a certificate?
+docker compose -f /etc/cerebro-agent/compose.yml --env-file /etc/cerebro-agent/compose.env ps caddy
+docker compose -f /etc/cerebro-agent/compose.yml --env-file /etc/cerebro-agent/compose.env \
+  logs --tail=100 caddy
+
+# Is the runtime configured to validate anything, and can it reach Authentik?
+cd /app/api && python -m cerebro.ops.preflight --profile pilot
+```
+
+- **`401` for every request, including ones the monolith says are freshly minted.** The
+  issuer, audience, or client id does not match what the token carries. Have the platform
+  owner decode a current token and compare `iss`, `aud`, and `azp` against the three seeded
+  values. Reseed and activate; do not relax a check to make a token fit.
+- **`401` with no `WWW-Authenticate: Bearer`.** The application refused it, so the
+  credential arrived and failed validation. With that header, the proxy refused it and no
+  bearer credential arrived at all — that is the monolith's side.
+- **Connection refused.** A deploy is draining, or Caddy is not running. Check the update
+  timer and `docker compose ps`.
+- **Certificate errors.** `preflight` will not catch these. Check expiry from outside with
+  `openssl s_client`, then the Caddy logs for a failed renewal — the usual cause is port 80
+  no longer reaching the address, or the DNS record having moved.
+- **`404` on a request the monolith believes is correct.** It is not using
+  `POST /integrations/bank-movements` exactly. Everything else answers 404 by design.
+
+Never paste an `Authorization` header, a token, or an event body into a ticket or a chat.
 
 ## Slack disconnected
 

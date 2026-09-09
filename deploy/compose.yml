@@ -1,6 +1,7 @@
 # Installed at /etc/cerebro-agent/compose.yml on the approved production VM.
 # /etc/cerebro-agent/env         -> container CEREBRO_* settings/secrets
-# /etc/cerebro-agent/compose.env -> interpolation only: registry, image tag, DB password
+# /etc/cerebro-agent/compose.env -> interpolation only: registry, image tag, DB password,
+#                                   public hostname, and COMPOSE_PROFILES
 
 name: cerebro-agent
 
@@ -69,6 +70,36 @@ services:
     stop_grace_period: 240s
     restart: unless-stopped
 
+  # The only service with a public listener, and only when the VM was seeded with a public
+  # hostname: without it COMPOSE_PROFILES stays empty and this service is not part of the
+  # project at all. Caddy terminates TLS, renews the certificate on its own, and forwards
+  # exactly one method and path to web; see deploy/Caddyfile.
+  caddy:
+    <<: *capped-logs
+    profiles: ["ingress"]
+    image: caddy:2
+    mem_limit: ${CEREBRO_CADDY_MEM:-256m}
+    # Compose interpolates every service, including ones no active profile selects, so these
+    # cannot be `:?` required variables without breaking a private deployment. Empty is the
+    # safe failure: the Caddyfile has no site address, Caddy refuses the config, and the
+    # container exits instead of listening on something nobody meant to publish.
+    environment:
+      CEREBRO_PUBLIC_HOSTNAME: ${CEREBRO_PUBLIC_HOSTNAME:-}
+      CEREBRO_ACME_EMAIL: ${CEREBRO_ACME_EMAIL:-}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/cerebro-agent/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Issued certificates and the ACME account key. Docker's data-root is on the managed
+      # data disk, so a container replacement never re-issues and never hits a rate limit.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      web:
+        condition: service_healthy
+    restart: unless-stopped
+
   db:
     <<: *capped-logs
     image: postgres:18
@@ -89,4 +120,6 @@ services:
     restart: unless-stopped
 
 volumes:
+  caddy-config:
+  caddy-data:
   pgdata:

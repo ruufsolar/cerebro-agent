@@ -80,6 +80,18 @@ class AppConfig(BaseSettings):
     external_tracing_enabled: bool = False
     public_url: str = "http://localhost:8000"
 
+    # Public bank-movement ingress. Off unless a deployment has a public hostname, an
+    # Authentik provider, and the one monolith client allowed to post. The endpoint itself
+    # is implemented separately and must refuse to serve unless bank_ingestion_ready is
+    # true: an enabled flag with no issuer to check against is not authentication.
+    bank_ingestion_enabled: bool = False
+    bank_ingestion_issuer: str = ""
+    bank_ingestion_audience: str = ""
+    bank_ingestion_client_id: str = ""
+    bank_ingestion_jwks_url: str = ""
+    bank_ingestion_leeway_seconds: int = Field(default=60, ge=0, le=300)
+    bank_ingestion_max_body_bytes: int = Field(default=65_536, ge=1_024, le=1_048_576)
+
     @property
     def sqlalchemy_url(self) -> str:
         return self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
@@ -127,6 +139,36 @@ class AppConfig(BaseSettings):
     @property
     def slack_ready(self) -> bool:
         return bool(self.slack_bot_token and self.slack_app_token)
+
+    @property
+    def bank_ingestion_jwks_uri(self) -> str:
+        """Where the signing keys come from.
+
+        Authentik publishes them under the provider URL that is also the token's `iss`, so
+        one seeded value gives both. An explicit override exists for a provider that does
+        not follow that layout, not because anything is expected to.
+        """
+        if self.bank_ingestion_jwks_url:
+            return self.bank_ingestion_jwks_url
+        if not self.bank_ingestion_issuer:
+            return ""
+        return self.bank_ingestion_issuer.rstrip("/") + "/jwks/"
+
+    @property
+    def bank_ingestion_ready(self) -> bool:
+        """Whether a token can actually be validated.
+
+        The flag alone is not enough. Without an issuer, an audience, and the authorized
+        client there is nothing to check a token against, and an endpoint that served
+        requests in that state would be an unauthenticated payment endpoint.
+        """
+        return bool(
+            self.bank_ingestion_enabled
+            and self.bank_ingestion_issuer
+            and self.bank_ingestion_audience
+            and self.bank_ingestion_client_id
+            and self.bank_ingestion_jwks_uri
+        )
 
     @property
     def pilot_configuration_ready(self) -> bool:

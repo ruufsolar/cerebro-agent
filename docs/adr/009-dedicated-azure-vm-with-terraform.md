@@ -44,7 +44,13 @@ rotation after readiness and replica allowlisting.
 - Container Apps, Kubernetes, and managed PostgreSQL remain future options if scale,
   availability, or business-write requirements justify their migration cost.
 
-## Amendment
+## Amendments
+
+[ADR-011](011-public-bank-movement-ingress.md) adds one public HTTPS path, for the
+monolith's bank-payment events, and performs the threat/network review this ADR deferred.
+"No custom inbound NSG rules" now reads: no inbound rule other than TCP 443 from the
+approved sources and TCP 80 for certificate renewal, and only on a deployment configured
+with a public hostname. Everything else here is unchanged.
 
 The image registry moved from GHCR to this deployment's Azure Container Registry. The VM
 pulls with its system-assigned managed identity and GitHub Actions pushes through a

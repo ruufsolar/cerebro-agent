@@ -11,6 +11,9 @@ fi
 
 mkdir -p /etc/cerebro-agent /var/backups/cerebro-agent
 install -m 644 "$HERE/compose.yml" /etc/cerebro-agent/compose.yml
+# Read-only inside the caddy container. Present whether or not ingress is enabled; the
+# `ingress` Compose profile is what decides whether anything serves it.
+install -m 644 "$HERE/Caddyfile" /etc/cerebro-agent/Caddyfile
 install -m 755 "$HERE/cerebro-agent-update.sh" /usr/local/bin/cerebro-agent-update.sh
 install -m 755 "$HERE/cerebro-agent-backup.sh" /usr/local/bin/cerebro-agent-backup.sh
 

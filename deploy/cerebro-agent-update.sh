@@ -24,6 +24,15 @@ DRAIN_TIMEOUT_S=240
 HEALTH_TIMEOUT_S=120
 FORCE_DEPLOY=${CEREBRO_FORCE_DEPLOY:-0}
 
+# Everything that can create new work. Slack ingestion always; the public bank-movements
+# ingress too, on a deployment that has one. Stopping both is what makes the drain below
+# converge instead of racing an event that arrives while the workers are being replaced.
+# When ingress is off the caddy service is not in the project and this stays just slack.
+INGRESS=(slack)
+if "${COMPOSE[@]}" config --services 2>/dev/null | grep -qx caddy; then
+  INGRESS+=(caddy)
+fi
+
 # docker image inspect can print a blank line before failing on a missing image, so strip
 # whitespace and treat empty as absent rather than trusting its exit status alone.
 image_id() {
@@ -66,9 +75,11 @@ if [ -n "$orphans" ] && [ "$orphans" != "0" ]; then
   echo "cerebro-agent: ignoring $orphans orphaned job(s) left in 'doing' by a dead worker" >&2
 fi
 
-# Stop new Slack ingestion first. Existing control/agent workers stay alive while the
+# Stop new ingestion first. Existing control/agent workers stay alive while the
 # already-accepted work drains, so the update never deliberately cancels an investigation.
-"${COMPOSE[@]}" stop --timeout "$DRAIN_TIMEOUT_S" slack
+# A bank event sent during this window is refused at the TCP level rather than accepted and
+# then abandoned, which is the answer a client retrying a 202 contract can act on.
+"${COMPOSE[@]}" stop --timeout "$DRAIN_TIMEOUT_S" "${INGRESS[@]}"
 
 waited=0
 while [ "$waited" -lt "$DRAIN_TIMEOUT_S" ]; do
@@ -84,7 +95,7 @@ done
 busy=$(running_jobs)
 if [ -n "$busy" ] && [ "$busy" != "0" ]; then
   echo "cerebro-agent: aborting deploy with $busy in-flight job(s) after ${DRAIN_TIMEOUT_S}s" >&2
-  "${COMPOSE[@]}" start slack
+  "${COMPOSE[@]}" start "${INGRESS[@]}"
   exit 1
 fi
 
@@ -95,7 +106,7 @@ fi
 busy=$(running_jobs)
 if [ -n "$busy" ] && [ "$busy" != "0" ]; then
   echo "cerebro-agent: aborting deploy because work restarted during worker drain" >&2
-  "${COMPOSE[@]}" start control-worker agent-worker slack
+  "${COMPOSE[@]}" start control-worker agent-worker "${INGRESS[@]}"
   exit 1
 fi
 

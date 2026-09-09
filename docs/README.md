@@ -39,8 +39,9 @@ the planning system.
 - [Slack](integrations/slack.md)
 - [Azure OpenAI](integrations/azure-openai.md)
 - [Monolith and replica](integrations/monolith.md)
-- [Future bank ingestion](integrations/bank-ingestion.md)
+- [Bank ingestion](integrations/bank-ingestion.md)
 - [Secrets](operations/secrets.md)
+- [Public ingress](operations/ingress.md)
 - [Deployment](operations/deployment.md)
 - [Azure Terraform deployment](../infra/terraform/README.md)
 - [Runbook](operations/runbook.md)
@@ -58,6 +59,7 @@ the planning system.
 - [ADR-008: V0 local operational telemetry](adr/008-v0-local-operational-telemetry.md)
 - [ADR-009: Dedicated Azure VM with Terraform](adr/009-dedicated-azure-vm-with-terraform.md)
 - [ADR-010: Conversational routing and specialist tools](adr/010-conversational-routing.md)
+- [ADR-011: Public bank-movement ingress](adr/011-public-bank-movement-ingress.md)
 
 When code and documentation disagree, treat that as a bug. Update `current-state.md` and
 the capability matrix in the same PR that changes behavior.
