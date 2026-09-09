@@ -6,7 +6,7 @@
 | Payment identification V0 | Preview; Slice 5 grounded outcomes, concise text, component-aware customer/signee matching, ephemeral screenshot vision, live replica tools; pilot pending | Slack mention/follow-up | Stored transcript metadata; triggering screenshot bytes; allowed replica relations; candidate-scoped Vambe | Same-thread evidence-grounded Slack reply in review/apply | No business action |
 | General FinOps conversation | Implemented preview; Slice 6B structured routing, scoped reads, concise in-character answer | Slack mention/follow-up classified certainly general | Approved knowledge; schema descriptions; allowlisted read-only SQL; triggering images | Same-thread Slack reply in review/apply | No business action |
 | Reaction feedback | Implemented | 🧀 / 🔌 | Cerebro payment and general outputs | Feedback row; flavor reply on 🔌 | No |
-| Automatic bank investigation | Future | New bank movement | Bank + same V0 reads | Proactive FinOps proposal | No business action |
+| Automatic bank investigation | Future; the authenticated ingress path exists (ADR-011), the endpoint and its event handling do not | Monolith `POST /integrations/bank-movements` | Bank + same V0 reads | Proactive FinOps proposal | No business action |
 | Register AR payment | Future | Explicit FinOps approval | Candidate + AR state | Monolith write API | Required |
 | Correct/revert AR payment | Future | Explicit FinOps approval | Existing association | Monolith write API | Required |
 | Hold recommendation | Future V1 | Due AR without payment | AR + payment context | Slack verdict proposal | FinOps decides |

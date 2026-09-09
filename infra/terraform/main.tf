@@ -2,6 +2,12 @@ locals {
   key_vault_name = "${var.name_prefix}-kv-${random_string.suffix.result}"
   vm_name        = "${var.name_prefix}-vm"
 
+  # One switch for the whole ingress: a hostname turns on the public address, the inbound
+  # rules, and (through the vault) the Caddy container. Empty keeps ADR-009's private shape.
+  ingress_enabled     = var.ingress_hostname != ""
+  ingress_dns_managed = local.ingress_enabled && var.dns_zone_name != ""
+  ingress_record_name = local.ingress_dns_managed ? trimsuffix(var.ingress_hostname, ".${var.dns_zone_name}") : ""
+
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
     azure_env_b64 = base64encode(join("", [
       "CEREBRO_KEY_VAULT_NAME=${local.key_vault_name}\n",
@@ -19,6 +25,7 @@ locals {
     bootstrap_script_b64  = base64encode(file("${path.module}/../../deploy/bootstrap.sh"))
     bootstrap_service_b64 = base64encode(file("${path.module}/templates/cerebro-agent-bootstrap.service"))
     registry_login_b64    = base64encode(file("${path.module}/templates/cerebro-registry-login.sh"))
+    caddyfile_b64         = base64encode(file("${path.module}/../../deploy/Caddyfile"))
     compose_b64           = base64encode(file("${path.module}/../../deploy/compose.yml"))
     compose_env_b64       = base64encode(file("${path.module}/../../deploy/compose.env.example"))
     docker_daemon_b64 = base64encode(jsonencode({
@@ -106,6 +113,120 @@ resource "azurerm_subnet_network_security_group_association" "runtime" {
   network_security_group_id = azurerm_network_security_group.runtime.id
 }
 
+# --- public HTTPS ingress ------------------------------------------------------------
+# ADR-009 provisioned a VM with no public address because Socket Mode needs none. The
+# monolith's bank-payment events need one, so this section adds exactly that path and
+# nothing else: an instance-level address, TCP 443 from the approved sources, and TCP 80
+# for the ACME HTTP-01 challenge that renews the certificate. Everything is count-gated on
+# ingress_hostname, so clearing that variable removes the address and the rules again.
+#
+# An instance-level public IP rather than a load balancer: with one VM a load balancer adds
+# a second failure domain and a monthly bill without adding availability. The NAT Gateway
+# keeps precedence for outbound flows, so attaching this does not change the egress address
+# the read replica allowlists.
+resource "azurerm_public_ip" "ingress" {
+  count               = local.ingress_enabled ? 1 : 0
+  name                = "${var.name_prefix}-ingress-ip"
+  location            = azurerm_resource_group.cerebro.location
+  resource_group_name = azurerm_resource_group.cerebro.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+  # A resolvable Azure-owned name for diagnosing DNS or certificate problems without
+  # depending on the ruuf.cl record. It is not the integration hostname. The suffix is the
+  # vault's, because this label is globally unique per region and a fixed one would make a
+  # second deployment - or a rebuild in the same region - fail on a name collision.
+  domain_name_label = "${var.name_prefix}-ingress-${random_string.suffix.result}"
+  tags              = var.tags
+}
+
+resource "azurerm_network_security_rule" "allow_https_inbound" {
+  count                       = local.ingress_enabled ? 1 : 0
+  name                        = "AllowHttpsInbound"
+  resource_group_name         = azurerm_resource_group.cerebro.name
+  network_security_group_name = azurerm_network_security_group.runtime.name
+  priority                    = 100
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "443"
+  # A single-element list must be passed as the singular attribute; Azure rejects a
+  # rule that sets both, and service tags are only valid in the singular form.
+  source_address_prefix      = length(var.ingress_allowed_source_ranges) == 1 ? var.ingress_allowed_source_ranges[0] : null
+  source_address_prefixes    = length(var.ingress_allowed_source_ranges) > 1 ? var.ingress_allowed_source_ranges : null
+  destination_address_prefix = "*"
+}
+
+# Let's Encrypt validates from several vantage points that are not knowable in advance, so
+# this one rule stays open to the Internet even when 443 is narrowed. Caddy answers only
+# /.well-known/acme-challenge/ on this port and returns 404 for everything else; it never
+# redirects, so no POST is ever replayed over a second request.
+resource "azurerm_network_security_rule" "allow_acme_http_inbound" {
+  count                       = local.ingress_enabled ? 1 : 0
+  name                        = "AllowAcmeHttpInbound"
+  resource_group_name         = azurerm_resource_group.cerebro.name
+  network_security_group_name = azurerm_network_security_group.runtime.name
+  priority                    = 110
+  direction                   = "Inbound"
+  access                      = "Allow"
+  protocol                    = "Tcp"
+  source_port_range           = "*"
+  destination_port_range      = "80"
+  source_address_prefix       = "Internet"
+  destination_address_prefix  = "*"
+}
+
+# Azure already denies everything not allowed above, at priority 65500. These rules exist so
+# the private surfaces are refused by name in the rule list: an operator adding a permissive
+# rule later has to notice and outrank a deny that says what it is protecting.
+#
+# They come with the ingress and go with it. A VM with no public address cannot be reached
+# from the Internet on any port, so on a private deployment these would be three rules that
+# protect nothing - and this whole file would stop being a no-op for a deployment that never
+# opts in, which is the property that makes it reviewable.
+resource "azurerm_network_security_rule" "deny_private_ports_inbound" {
+  for_each = local.ingress_enabled ? {
+    DenySshInbound         = { priority = 4000, ports = ["22"] }
+    DenyPostgresInbound    = { priority = 4001, ports = ["5432", "5434"] }
+    DenyOperationalInbound = { priority = 4002, ports = ["8000", "8010"] }
+  } : {}
+
+  name                        = each.key
+  resource_group_name         = azurerm_resource_group.cerebro.name
+  network_security_group_name = azurerm_network_security_group.runtime.name
+  priority                    = each.value.priority
+  direction                   = "Inbound"
+  access                      = "Deny"
+  protocol                    = "*"
+  source_port_range           = "*"
+  destination_port_ranges     = each.value.ports
+  source_address_prefix       = "Internet"
+  destination_address_prefix  = "*"
+}
+
+# Only when the zone is in Azure DNS. Otherwise Terraform reports the address and the record
+# is created wherever ruuf.cl is hosted; the certificate cannot be issued until it resolves.
+resource "azurerm_dns_a_record" "ingress" {
+  count               = local.ingress_dns_managed ? 1 : 0
+  name                = local.ingress_record_name
+  zone_name           = var.dns_zone_name
+  resource_group_name = var.dns_zone_resource_group_name
+  ttl                 = var.dns_record_ttl
+  records             = [azurerm_public_ip.ingress[0].ip_address]
+  tags                = var.tags
+
+  lifecycle {
+    precondition {
+      condition     = var.dns_zone_resource_group_name != ""
+      error_message = "dns_zone_resource_group_name is required when dns_zone_name is set."
+    }
+    precondition {
+      condition     = endswith(var.ingress_hostname, ".${var.dns_zone_name}")
+      error_message = "ingress_hostname must be a name inside dns_zone_name."
+    }
+  }
+}
+
 resource "azurerm_network_interface" "runtime" {
   name                = "${var.name_prefix}-nic"
   location            = azurerm_resource_group.cerebro.location
@@ -116,6 +237,10 @@ resource "azurerm_network_interface" "runtime" {
     name                          = "private"
     subnet_id                     = azurerm_subnet.runtime.id
     private_ip_address_allocation = "Dynamic"
+    # Null while ingress is off, which is how the NIC returns to having no public address.
+    # The NAT Gateway on this subnet still owns egress, so outbound_public_ip - the address
+    # the read replica allowlists - does not change when this is attached.
+    public_ip_address_id = one(azurerm_public_ip.ingress[*].id)
   }
 
   depends_on = [

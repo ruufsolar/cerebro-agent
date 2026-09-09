@@ -34,6 +34,11 @@ write_files:
     permissions: '0755'
     encoding: b64
     content: ${backup_script_b64}
+  - path: /opt/cerebro-agent/deploy/Caddyfile
+    owner: root:root
+    permissions: '0644'
+    encoding: b64
+    content: ${caddyfile_b64}
   - path: /opt/cerebro-agent/deploy/compose.yml
     owner: root:root
     permissions: '0644'

@@ -79,21 +79,51 @@ The local synthetic database is intentionally not a physical replica and therefo
 This access is required to activate Slice 3 against real data, but not for the fake Slack
 shell or the synthetic fixture profile.
 
-## 4. GitHub, container registry, and Azure runtime
+## 4. Authentik and DNS, for the bank-movements endpoint
+
+Only for a deployment that will receive the monolith's bank-payment events. Skip it and
+Cerebro stays private, with Slack as its only trigger.
+
+1. Ask the platform owner — the same owner as Cerebro's `agents-cerebro` M2M client — for a
+   **dedicated** Authentik OAuth2/OIDC machine-to-machine provider and application for this
+   call. A client that already serves another integration must not be reused: its id is what
+   authorizes posting payments.
+2. Have them mint one token with that client
+   (`https://auth.ruuf.solar/application/o/token/`, `grant_type=client_credentials`), decode
+   it, and report `iss`, `aud`, and `azp` as non-secret metadata. Do not send the token
+   itself. Copy those three values rather than constructing them: Authentik's issuer mode
+   and audience contents are per-installation choices.
+3. Record them as `CEREBRO_BANK_INGESTION_ISSUER`, `CEREBRO_BANK_INGESTION_AUDIENCE`, and
+   `CEREBRO_BANK_INGESTION_CLIENT_ID`.
+4. Ask the owner of the `ruuf.cl` zone to create `A cerebro.ruuf.cl` pointing at the address
+   from `terraform output -raw ingress_public_ip`, with a short TTL — or, if the zone is in
+   Azure DNS, give Terraform `dns_zone_name` and `dns_zone_resource_group_name` and it
+   creates the record. The name must resolve before activation.
+5. Ask the platform owner which addresses the monolith calls out from, for
+   `ingress_allowed_source_ranges`. `["Internet"]` works; a narrower list is better.
+6. Choose the mailbox the certificate authority writes to about expiry, as
+   `CEREBRO_ACME_EMAIL`.
+
+The full sequence, the checks, and the rollback are in [public ingress](ingress.md).
+
+## 5. GitHub, container registry, and Azure runtime
 
 1. Confirm GitHub Actions can push to this deployment's Azure Container Registry through the
    Terraform-created federated credential and the published repository variables; no
    registry secret is stored in GitHub.
 2. Review and apply the [Azure Terraform stack](../../infra/terraform/README.md). It creates
    a dedicated VM rather than placing Cerebro on Wattson's host.
-3. Give the Terraform `outbound_public_ip` to the replica owner for allowlisting. No VM
-   public IP or inbound application port is created.
+3. Give the Terraform `outbound_public_ip` to the replica owner for allowlisting. That
+   address is the NAT Gateway's and does not change when an ingress address is attached.
+   No VM public IP or inbound application port is created unless `ingress_hostname` is set.
 4. No registry credential is seeded; the VM pulls with its system-assigned managed identity
    and the approved runtime values, then activate through Azure Run Command.
 5. Confirm pilot readiness and preflight while mode is `off`; switch explicitly to `review`
    only when the test channel and operator are ready.
 6. Socket Mode needs outbound HTTPS/WebSocket access to Slack and HTTPS to Azure,
-   plus network access from Cerebro only to the replica endpoint.
+   plus network access from Cerebro only to the replica endpoint. A deployment with a public
+   ingress also needs outbound HTTPS to `auth.ruuf.solar` for Authentik's signing keys and to
+   Let's Encrypt, both of which the existing NAT egress already allows.
 
 ## Values to bring back to engineering
 
@@ -102,6 +132,8 @@ exist: Slack app/bot tokens, Azure endpoint/key/deployment, Cerebro DB password,
 DSN. Also provide non-secret workspace/app/bot/
 channel IDs, Azure deployment name, endpoint hostname, quota, replica schema version/source,
 and Azure subscription/region, stable outbound IP, VM/resource-group names, and Key Vault
-name.
+name. For a deployment with public ingress, also the public hostname, its inbound address,
+and the Authentik issuer, audience, and authorized client id — all non-secret, and all
+needed before the endpoint can accept anything.
 
 PostHog and external Agents SDK tracing are deliberately absent from V0. See ADR-008.

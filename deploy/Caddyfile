@@ -1,0 +1,106 @@
+# Cerebro's only public surface. Installed at /etc/cerebro-agent/Caddyfile and served by the
+# `caddy` Compose service, which runs only under the `ingress` profile; with no public
+# hostname seeded, this file is present but nothing reads it.
+#
+# The rules here are deliberately narrow. Exactly one method and one path reach the
+# application. `/health`, `/ready`, `/docs`, `/openapi.json`, PostgreSQL, and the workers
+# stay on loopback and the Compose network, and no rule below can reach them.
+#
+# The Authorization pre-filter is a cheap refusal, not authentication. Cerebro validates the
+# Authentik token itself - signature, issuer, audience, authorized client, expiry - and must
+# keep doing so; this only means an unauthenticated scanner never reaches that code.
+{
+	email {$CEREBRO_ACME_EMAIL}
+	admin off
+
+	servers {
+		timeouts {
+			read_body 15s
+			read_header 10s
+			write 30s
+			idle 60s
+		}
+	}
+}
+
+(private_logs) {
+	# Caddy never logs bodies. This drops the credential headers as well, so a Docker log
+	# or a pasted diagnostic can never carry a bearer token.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>headers>Authorization delete
+				request>headers>Proxy-Authorization delete
+				request>headers>Cookie delete
+				resp_headers>Set-Cookie delete
+			}
+		}
+	}
+}
+
+{$CEREBRO_PUBLIC_HOSTNAME} {
+	import private_logs
+
+	# TCP 443 may be narrowed to the monolith's egress addresses, which would leave the
+	# TLS-ALPN challenge unreachable and every renewal starting with a failed attempt.
+	# HTTP-01 over the always-open port 80 is the challenge that keeps working under that
+	# rule, so ask for it directly. Renewal is automatic and needs no operator action.
+	tls {
+		issuer acme {
+			email {$CEREBRO_ACME_EMAIL}
+			disable_tlsalpn_challenge
+		}
+	}
+
+	# The monolith sends one small JSON event. Anything larger is refused before it is read
+	# into the application.
+	request_body {
+		max_size 64KB
+	}
+
+	header -Server
+
+	@bank_movements {
+		method POST
+		path /integrations/bank-movements
+	}
+	@unauthenticated {
+		method POST
+		path /integrations/bank-movements
+		not header Authorization Bearer*
+	}
+
+	handle @unauthenticated {
+		header WWW-Authenticate `Bearer realm="cerebro"`
+		respond 401
+	}
+
+	handle @bank_movements {
+		# Replace rather than append: an X-Forwarded-For a client invented must never reach
+		# uvicorn, which is configured to trust the header it is given.
+		reverse_proxy web:8000 {
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+
+			transport http {
+				dial_timeout 5s
+				read_timeout 30s
+			}
+		}
+	}
+
+	handle {
+		respond 404
+	}
+}
+
+# Port 80 exists for the ACME HTTP-01 challenge, which Caddy answers ahead of these routes.
+# Everything else gets 404 rather than Caddy's default redirect to HTTPS: a redirected POST
+# is a payment event delivered twice or not at all, depending on the client.
+http://{$CEREBRO_PUBLIC_HOSTNAME} {
+	import private_logs
+	header -Server
+	respond 404
+}

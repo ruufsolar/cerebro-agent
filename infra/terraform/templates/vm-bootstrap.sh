@@ -159,12 +159,45 @@ if [ -n "$RUUF_AGENTS_URL" ]; then
   RUUF_AGENTS_M2M_CLIENT_SECRET=$(vault_secret ruuf-agents-m2m-client-secret)
   RUUF_AGENTS_M2M_SCOPE=$(optional_vault_secret ruuf-agents-m2m-scope)
 fi
+# Public HTTPS ingress for the monolith's bank-payment events. Absent hostname, no ingress:
+# the Compose profile stays empty, Caddy is not part of the project, and the VM keeps the
+# private shape it had before. The Authentik values below are what lets Cerebro validate the
+# monolith's token, so they are required whenever the hostname is set: opening a public
+# listener without them would publish an endpoint nothing can authenticate.
+PUBLIC_HOSTNAME=$(optional_vault_secret public-hostname)
+ACME_EMAIL=
+BANK_INGESTION_ISSUER=
+BANK_INGESTION_AUDIENCE=
+BANK_INGESTION_CLIENT_ID=
+# Deliberately not named COMPOSE_PROFILES: a shell variable of that name would take
+# precedence over the env file for any `docker compose` this script goes on to invoke.
+INGRESS_PROFILE=
+if [ -n "$PUBLIC_HOSTNAME" ]; then
+  ACME_EMAIL=$(vault_secret acme-contact-email)
+  BANK_INGESTION_ISSUER=$(vault_secret bank-ingestion-issuer)
+  BANK_INGESTION_AUDIENCE=$(vault_secret bank-ingestion-audience)
+  BANK_INGESTION_CLIENT_ID=$(vault_secret bank-ingestion-client-id)
+  INGRESS_PROFILE=ingress
+fi
 
 [[ "$DB_PASSWORD" =~ ^[A-Za-z0-9]+$ ]] || fail "database password must be alphanumeric"
 [[ "$GLOBAL_MODE" =~ ^(off|shadow|review|apply)$ ]] || fail "global mode is invalid"
 [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9._-]+$ ]] || fail "image tag is invalid"
 [ -z "$RUUF_AGENTS_URL" ] || [[ "$RUUF_AGENTS_URL" =~ ^https://[^[:space:]/]+$ ]] || \
   fail "shared memory URL must be https://<host> with no path"
+if [ -n "$PUBLIC_HOSTNAME" ]; then
+  # Caddy asks a public certificate authority for exactly this name, and the name reaches
+  # Caddy through Compose interpolation. Refuse anything that is not a plain hostname.
+  [[ "$PUBLIC_HOSTNAME" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || \
+    fail "public hostname must be a lowercase fully qualified domain name"
+  [[ "$ACME_EMAIL" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] || \
+    fail "ACME contact email is invalid"
+  # Authentik issues tokens whose "iss" is the provider URL, ending in a slash.
+  [[ "$BANK_INGESTION_ISSUER" =~ ^https://[^[:space:]]+/$ ]] || \
+    fail "bank ingestion issuer must be an https URL ending in /"
+  [ -n "$BANK_INGESTION_AUDIENCE" ] || fail "bank ingestion audience is missing"
+  [ -n "$BANK_INGESTION_CLIENT_ID" ] || fail "bank ingestion client id is missing"
+fi
 
 old_hash=missing
 if [ -r "$RUNTIME_ENV" ] && [ -r "$COMPOSE_ENV" ]; then
@@ -214,7 +247,18 @@ runtime_tmp=$(mktemp /etc/cerebro-agent/env.XXXXXX)
   write_env_value CEREBRO_WORKER_CONCURRENCY 2
   write_env_value CEREBRO_RUNTIME_HEARTBEAT_SECONDS 15
   write_env_value CEREBRO_RUNTIME_STALE_SECONDS 45
-  write_env_value CEREBRO_PUBLIC_URL http://127.0.0.1:8000
+  if [ -n "$PUBLIC_HOSTNAME" ]; then
+    write_env_value CEREBRO_PUBLIC_URL "https://$PUBLIC_HOSTNAME"
+    # Cerebro validates the monolith's Authentik token itself. Caddy only refuses requests
+    # with no bearer credential at all; it cannot check a signature, issuer, or audience.
+    write_env_value CEREBRO_BANK_INGESTION_ENABLED true
+    write_env_value CEREBRO_BANK_INGESTION_ISSUER "$BANK_INGESTION_ISSUER"
+    write_env_value CEREBRO_BANK_INGESTION_AUDIENCE "$BANK_INGESTION_AUDIENCE"
+    write_env_value CEREBRO_BANK_INGESTION_CLIENT_ID "$BANK_INGESTION_CLIENT_ID"
+  else
+    write_env_value CEREBRO_PUBLIC_URL http://127.0.0.1:8000
+    write_env_value CEREBRO_BANK_INGESTION_ENABLED false
+  fi
   if [ -n "$RUUF_AGENTS_URL" ]; then
     write_env_value RUUF_AGENTS_URL "$RUUF_AGENTS_URL"
     write_env_value RUUF_AGENTS_M2M_CLIENT_ID "$RUUF_AGENTS_M2M_CLIENT_ID"
@@ -237,6 +281,12 @@ compose_tmp=$(mktemp /etc/cerebro-agent/compose.env.XXXXXX)
   printf 'CEREBRO_AGENT_WORKER_MEM=1536m\n'
   printf 'CEREBRO_SLACK_MEM=384m\n'
   printf 'CEREBRO_DB_MEM=1024m\n'
+  printf 'CEREBRO_CADDY_MEM=256m\n'
+  # Empty unless a hostname was seeded, which is what keeps the caddy service out of the
+  # Compose project entirely on a private deployment.
+  printf 'COMPOSE_PROFILES=%s\n' "$INGRESS_PROFILE"
+  printf 'CEREBRO_PUBLIC_HOSTNAME=%s\n' "$PUBLIC_HOSTNAME"
+  printf 'CEREBRO_ACME_EMAIL=%s\n' "$ACME_EMAIL"
 } > "$compose_tmp"
 chmod 0600 "$compose_tmp"
 mv "$compose_tmp" "$COMPOSE_ENV"

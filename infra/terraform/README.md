@@ -14,19 +14,28 @@ would add a second migration problem without improving the pilot.
 
 ```text
 Slack Socket Mode ──outbound──┐
-Azure OpenAI ───────outbound──┼── NAT Gateway / stable IP ── private Azure VM
-Read replica ───────outbound──┘                               ├─ web
-                                                             ├─ control-worker
-GitHub Actions ──push── ACR ──pull────────────────────────────├─ agent-worker
-                                                             ├─ slack
-Azure Key Vault ──managed identity───────────────────────────└─ PostgreSQL
+Azure OpenAI ───────outbound──┼── NAT Gateway / stable IP ── Azure VM
+Read replica ───────outbound──┤                               ├─ web
+Authentik (JWKS) ───outbound──┘                               ├─ control-worker
+                                                              ├─ agent-worker
+GitHub Actions ──push── ACR ──pull─────────────────────────── ├─ slack
+                                                              ├─ PostgreSQL
+Azure Key Vault ──managed identity─────────────────────────── │
+                                                              └─ caddy ◀── 443
+monolith ──POST /integrations/bank-movements──▶ ingress IP ───┘        ◀── 80 (ACME)
                                                                     │
                                                               managed data disk
 ```
 
-- The VM has no public IP and the network security group adds no custom inbound rules.
-- Slack Socket Mode means Cerebro needs no webhook, DNS name, TLS certificate, or load
-  balancer.
+- Without a configured `ingress_hostname` the VM has no public IP and the network security
+  group adds no custom inbound rules; Slack Socket Mode needs no webhook, DNS name, TLS
+  certificate, or load balancer.
+- With one, it gains exactly one public path: TCP 443 from the approved sources and TCP 80
+  for certificate renewal, with Caddy forwarding `POST /integrations/bank-movements` to
+  `web` and answering 404 for everything else. `/health`, `/ready`, PostgreSQL, the workers,
+  and SSH stay private, and the NSG denies their ports by name as well as by default.
+  See [ADR-011](../../docs/adr/011-public-bank-movement-ingress.md) and the
+  [public ingress runbook](../../docs/operations/ingress.md).
 - A Standard NAT Gateway gives all outbound traffic a stable address. Give
   `terraform output -raw outbound_public_ip` to the replica owner for allowlisting.
 - The system-assigned VM identity can read only this deployment's Key Vault secrets.
@@ -54,9 +63,14 @@ Approve these choices before applying:
 6. Initial mode. Use `off` for provisioning, then explicitly seed `review` for the pilot.
 7. Acceptance of the pilot's availability boundary: one VM, one local PostgreSQL, and
    backups on the same managed disk. This is recoverable infrastructure, not HA/GA.
+8. Whether this deployment has a public ingress at all, and if so: the hostname, where its
+   DNS zone is hosted, the sources allowed to reach TCP 443, and the Authentik client that
+   is authorized to post bank movements. `ingress_hostname = ""` is the default and creates
+   none of it.
 
-No payment writes, holds, public ingress, SSH ingress, or customer communication are
-enabled by this stack.
+No payment writes, holds, SSH ingress, or customer communication are enabled by this stack.
+A public ingress exists only when `ingress_hostname` is set, and even then reaches only the
+authenticated bank-movements path.
 
 ## Required operator access
 
@@ -116,10 +130,18 @@ terraform apply cerebro-prod.tfplan
 ```
 
 Do not use `-auto-approve`. Review the plan for one VM, one retained managed disk, one NAT
-Gateway/public egress IP, no VM public IP or custom inbound rule, the dedicated network,
+Gateway/public egress IP, the dedicated network,
 Key Vault, the container registry, two user-assigned identities (publish and deploy) with
 their federated credentials, one custom role definition, and exactly seven role assignments:
 three scoped to the vault, three scoped to the registry, and one scoped to the VM.
+
+Inbound is what the plan should be read for most carefully. With `ingress_hostname` empty,
+expect no VM public IP and no custom inbound rule at all — an existing private deployment
+should plan no changes whatsoever. With it set, expect exactly one public IP,
+`AllowHttpsInbound` on 443 from the configured sources, `AllowAcmeHttpInbound` on 80 from
+the Internet, three `Deny*Inbound` rules covering SSH, PostgreSQL, and the operational
+ports, and an **in-place update** to the network interface that attaches the address.
+Anything else inbound, and any plan that replaces the NIC or the VM, is a finding.
 
 After apply:
 
@@ -192,6 +214,7 @@ The resulting vault contract is explicit and intentionally small:
 | `cerebro-db-password` | reused from the vault on reseed; generated on first seed; explicit operator override only for a deliberate rotation |
 | `global-mode`, `image-tag` | seeder flags |
 | `ruuf-agents-url`, `ruuf-agents-m2m-client-id`, `ruuf-agents-m2m-client-secret`, `ruuf-agents-m2m-scope` | approved Cerebro `.env`, only when it has a `RUUF_AGENTS_URL` line; `none` stands for an empty value because Key Vault cannot hold one |
+| `public-hostname`, `acme-contact-email`, `bank-ingestion-issuer`, `bank-ingestion-audience`, `bank-ingestion-client-id` | approved Cerebro `.env`, only when it has a `CEREBRO_PUBLIC_HOSTNAME` line. A hostname requires all five; the seeder refuses to publish an endpoint whose tokens could not be validated. `none` turns the ingress off |
 
 If a role assignment has not propagated, wait a few minutes and rerun the exact seeding
 command. Re-running creates new Key Vault secret versions and is safe.
@@ -213,6 +236,12 @@ afterwards. Then, on the VM, it:
 4. authenticates to the registry with the VM managed identity;
 5. starts the Compose stack and timers;
 6. waits for pilot `/ready` to pass.
+
+When the deployment has a public hostname, activation also waits for the proxy to listen
+before reporting success, and preflight gains a `bank_ingestion` check that reads Authentik's
+key set. The full setup, validation, and rollback sequence is the
+[public ingress runbook](../../docs/operations/ingress.md); the DNS record must resolve
+before this step, because Caddy asks for the certificate on its first start.
 
 Keep production `off` until preflight, the rollback drill, and the pilot channel are ready.
 To enter review mode, reseed with `--mode review` and run `activate.sh` again. Secret or mode
@@ -267,6 +296,10 @@ in a ticket.
 - **Rollback:** run `deploy.yml` from the Actions tab with `image_tag` set to the previous
   SHA. Locally, seed `--image-tag last-good` only after confirming the local tag exists,
   activate, and confirm `/ready`; then restore a reviewed immutable SHA.
+- **Remove the public ingress:** reseed with an empty `CEREBRO_PUBLIC_HOSTNAME` and
+  activate. The Caddy container goes away as an orphan and Cerebro keeps running on Slack;
+  the address and rules remain until `ingress_hostname` is also cleared and applied, which
+  releases the address for good. See the ingress runbook for why that order matters.
 - **Recover a VM:** Terraform may replace the VM. The managed disk is separately retained,
   reattached at LUN 0, and remounted by bootstrap. Review the plan before replacement.
 - **Recover PostgreSQL:** use the latest dump in `/var/backups/cerebro-agent` according to
@@ -304,3 +337,5 @@ pilot HA.
 - [Azure NAT Gateway](https://learn.microsoft.com/en-us/azure/nat-gateway/)
 - [Azure managed disks](https://learn.microsoft.com/en-us/azure/virtual-machines/managed-disks-overview)
 - [Azure Run Command](https://learn.microsoft.com/en-us/azure/virtual-machines/linux/run-command-managed)
+- [NAT Gateway takes precedence over instance-level public IPs for outbound](https://learn.microsoft.com/en-us/azure/nat-gateway/nat-gateway-resource)
+- [Caddy automatic HTTPS](https://caddyserver.com/docs/automatic-https)

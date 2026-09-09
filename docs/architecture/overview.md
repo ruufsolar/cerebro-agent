@@ -52,6 +52,11 @@ an idempotent outbox record so retries do not produce duplicate answers.
 Cerebro uses its own Azure resource group, private VM, stable NAT egress, Key Vault, retained
 data disk, image, Compose project, PostgreSQL volume, update timer, and backup directory.
 It does not share Wattson's VM. Socket Mode means Slack does not require a public inbound
-route; the VM has no public IP or custom inbound NSG rule and the health port binds to localhost.
+route. The monolith's bank-payment events do: a deployment configured with a public hostname
+gains one address, TCP 443 from approved sources, TCP 80 for certificate renewal, and a proxy
+that forwards only `POST /integrations/bank-movements`
+([ADR-011](../adr/011-public-bank-movement-ingress.md)). Without that hostname the VM has no
+public IP or custom inbound NSG rule at all. Either way the health port binds to localhost
+and has no public route.
 Runtime secrets are seeded after Terraform and read through the VM managed identity, never
 stored in Terraform state.

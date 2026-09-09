@@ -113,3 +113,59 @@ variable "github_deploy_environment" {
     error_message = "github_deploy_environment must be a plain environment name."
   }
 }
+
+# --- public HTTPS ingress ------------------------------------------------------
+# Empty ingress_hostname keeps the private-only shape ADR-009 provisioned: no VM public
+# IP, no inbound NSG rule, no Caddy container. Setting it is what turns ingress on, in
+# Terraform and (through the vault's public-hostname secret) on the VM.
+
+variable "ingress_hostname" {
+  description = "Public hostname for the bank-movements endpoint, e.g. cerebro.ruuf.cl. Empty leaves Cerebro private."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.ingress_hostname == "" || can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.ingress_hostname))
+    error_message = "ingress_hostname must be a lowercase fully qualified domain name, or empty."
+  }
+}
+
+# Application-level Authentik validation is the real gate, but a source allowlist means a
+# scanner never reaches it. Narrow this to the monolith's egress addresses as soon as the
+# platform owner confirms them; "Internet" is the working default, not the target state.
+variable "ingress_allowed_source_ranges" {
+  description = "Sources allowed to reach TCP 443. Azure service tags or CIDRs. Narrow to the monolith's egress addresses."
+  type        = list(string)
+  default     = ["Internet"]
+
+  validation {
+    condition     = length(var.ingress_allowed_source_ranges) > 0
+    error_message = "ingress_allowed_source_ranges must list at least one source; use [\"Internet\"] deliberately."
+  }
+}
+
+# Optional: manage the A record here when ruuf.cl (or a delegated zone) lives in Azure DNS.
+# Left empty, Terraform only reports the address and the record is created wherever the zone
+# is hosted. Certificate issuance needs the record to exist before the VM is activated.
+variable "dns_zone_name" {
+  description = "Azure DNS zone holding ingress_hostname. Empty means the record is managed outside Terraform."
+  type        = string
+  default     = ""
+}
+
+variable "dns_zone_resource_group_name" {
+  description = "Resource group of dns_zone_name. Required when dns_zone_name is set."
+  type        = string
+  default     = ""
+}
+
+variable "dns_record_ttl" {
+  description = "TTL for the managed A record. Keep it short while the address may still move."
+  type        = number
+  default     = 300
+
+  validation {
+    condition     = var.dns_record_ttl >= 60 && var.dns_record_ttl <= 86400
+    error_message = "dns_record_ttl must be between 60 and 86400 seconds."
+  }
+}

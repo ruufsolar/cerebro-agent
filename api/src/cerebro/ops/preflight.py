@@ -11,6 +11,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
+import httpx
 from slack_sdk.web.async_client import AsyncWebClient
 from sqlalchemy import text
 
@@ -81,6 +82,25 @@ async def _replica_check(config: AppConfig) -> str:
         await database.close()
 
 
+async def _bank_ingestion_check(config: AppConfig) -> str:
+    """Can the public endpoint actually validate a monolith token?
+
+    Reaching Authentik's key set is the part that fails silently: an issuer with a typo, a
+    provider that was never published, or egress that cannot reach auth.ruuf.solar all leave
+    an ingress that refuses every real request. Nothing here needs a credential, so this is
+    safe to run before the monolith has ever called.
+    """
+    if not config.bank_ingestion_ready:
+        return "incomplete"
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(config.bank_ingestion_jwks_uri)
+    if response.status_code != 200:
+        return f"jwks_http_{response.status_code}"
+    if not response.json().get("keys"):
+        return "jwks_empty"
+    return "ok"
+
+
 async def _provider_check(config: AppConfig) -> str:
     runner = OpenAIAgentsRunner(config, data=EmptyInvestigationData())
     now = datetime.now(UTC)
@@ -123,6 +143,8 @@ async def run_preflight(profile: ReadinessProfile, live_provider: bool) -> dict[
                 "replica": lambda: _replica_check(config),
             }
         )
+    if config.bank_ingestion_enabled:
+        operations["bank_ingestion"] = lambda: _bank_ingestion_check(config)
     if live_provider:
         operations["azure_provider"] = lambda: _provider_check(config)
 
