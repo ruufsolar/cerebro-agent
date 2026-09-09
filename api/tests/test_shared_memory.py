@@ -6,6 +6,8 @@ back — including the two answers that matter most: nothing configured, and a
 platform that is not answering.
 """
 
+from collections.abc import Callable
+from dataclasses import replace
 from typing import get_args
 
 import httpx
@@ -14,6 +16,8 @@ import pytest
 from cerebro.agent import shared_memory
 from cerebro.agent.data_tools import SharedMemoryNote, safe_input_summary
 from cerebro.memory_client import AsyncMemoryClient, Credentials
+
+STORED = {"id": "1", "content": "Algo aprendido hoy", "tier": "short_term"}
 
 BRIEF = {
     "stable": "Eres Cerebro, el agente de FinOps de RUUF.",
@@ -34,6 +38,55 @@ def _client(handler: object) -> AsyncMemoryClient:
 @pytest.fixture(autouse=True)
 def _forget_client() -> None:
     shared_memory.client.cache_clear()
+    shared_memory.forget()
+
+
+def _counting(response: httpx.Response) -> tuple[AsyncMemoryClient, list[httpx.Request]]:
+    """A client that answers with `response` and keeps every request, so a test
+    can assert on how many times the platform was actually asked."""
+    seen: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return response
+
+    return _client(handle), seen
+
+
+def _counting_briefs(write: httpx.Response) -> tuple[AsyncMemoryClient, list[httpx.Request]]:
+    """The same, for a test that writes: the writes get `write`, and only the
+    brief requests are counted."""
+    briefs: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/memories"):
+            return write
+        briefs.append(request)
+        return httpx.Response(200, json=BRIEF)
+
+    return _client(handle), briefs
+
+
+def _then_unreachable() -> Callable[[httpx.Request], httpx.Response]:
+    """Answers the first request and refuses every one after it."""
+    answered = False
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        nonlocal answered
+        if answered:
+            raise httpx.ConnectError("connection refused", request=request)
+        answered = True
+        return httpx.Response(200, json=BRIEF)
+
+    return handle
+
+
+def _age(seconds: float) -> None:
+    """Move the cached brief that far into the past, so the next `load` sees the
+    age it would have after that long without touching the clock."""
+    cached = shared_memory._brief
+    assert cached is not None
+    shared_memory._brief = replace(cached, fetched_at=cached.fetched_at - seconds)
 
 
 class TestWithoutTheStore:
@@ -112,6 +165,84 @@ class TestTheBlockAboveThePrompt:
 
         assert seen[0].url.path == "/api/agents/cerebro/brief"
         assert seen[0].url.params["token_budget"] == "4000"
+
+
+class TestTheCache:
+    async def test_a_second_run_does_not_ask_the_platform_again(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client, seen = _counting(httpx.Response(200, json=BRIEF))
+        monkeypatch.setattr(shared_memory, "client", lambda: client)
+
+        first = await shared_memory.load()
+        second = await shared_memory.load()
+
+        assert len(seen) == 1
+        assert first is not None and second is not None
+        # The same bytes, which is also what a provider caching a prompt prefix
+        # needs to keep hitting its cache.
+        assert first.text == second.text
+
+    async def test_the_brief_is_read_again_once_it_is_old(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client, seen = _counting(httpx.Response(200, json=BRIEF))
+        monkeypatch.setattr(shared_memory, "client", lambda: client)
+
+        await shared_memory.load()
+        _age(shared_memory.BRIEF_TTL_SECONDS + 1)
+        await shared_memory.load()
+
+        assert len(seen) == 2
+
+    async def test_a_write_puts_the_next_run_back_on_the_store(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # What Cerebro just learned is in the volatile block immediately; making
+        # ops wait out the TTL for it would look like the write had not worked.
+        client, briefs = _counting_briefs(httpx.Response(201, json=STORED))
+        monkeypatch.setattr(shared_memory, "client", lambda: client)
+
+        await shared_memory.load()
+        await shared_memory.remember(SharedMemoryNote(content="Algo aprendido hoy"))
+        await shared_memory.load()
+
+        assert len(briefs) == 2
+
+    async def test_a_failed_write_leaves_the_cached_brief_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client, briefs = _counting_briefs(httpx.Response(422))
+        monkeypatch.setattr(shared_memory, "client", lambda: client)
+
+        await shared_memory.load()
+        await shared_memory.remember(SharedMemoryNote(content="Algo aprendido hoy"))
+        await shared_memory.load()
+
+        assert len(briefs) == 1
+
+    async def test_an_outage_keeps_serving_the_brief_it_last_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _client(_then_unreachable())
+        monkeypatch.setattr(shared_memory, "client", lambda: client)
+        good = await shared_memory.load()
+        _age(shared_memory.BRIEF_TTL_SECONDS + 1)
+        during_outage = await shared_memory.load()
+
+        assert good is not None
+        assert during_outage is not None
+        assert during_outage.text == good.text
+
+    async def test_a_long_outage_stops_pretending_the_brief_is_current(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        client = _client(_then_unreachable())
+        monkeypatch.setattr(shared_memory, "client", lambda: client)
+        await shared_memory.load()
+        _age(shared_memory.BRIEF_MAX_STALE_SECONDS + 1)
+
+        assert await shared_memory.load() is None
 
 
 class TestWriting:
