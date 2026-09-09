@@ -133,6 +133,19 @@ class ReadonlySqlQuery(BaseModel):
     query: str = Field(min_length=1, max_length=10_000)
 
 
+class SharedMemoryNote(BaseModel):
+    """The one tool request here that writes something.
+
+    Not to RUUF's data — that boundary stays read-only — but to the agents
+    platform's short-term memory for Cerebro, which is reviewed by consolidation
+    before it becomes anything more permanent.
+    """
+
+    content: str = Field(min_length=8, max_length=1_500)
+    kind: Literal["fact", "procedure", "preference", "rule"] = "fact"
+    topic: str | None = Field(default=None, max_length=80)
+
+
 ToolRequest = (
     KnowledgeQuery
     | SchemaQuery
@@ -140,6 +153,7 @@ ToolRequest = (
     | VerifyCandidateQuery
     | VambeQuery
     | ReadonlySqlQuery
+    | SharedMemoryNote
 )
 
 
@@ -150,6 +164,10 @@ def safe_input_summary(request: ToolRequest) -> dict[str, object]:
         return {"table_count": len(request.names)}
     if isinstance(request, KnowledgeQuery):
         return {"topic": request.topic}
+    if isinstance(request, SharedMemoryNote):
+        # The content is a memory, not evidence: length and kind are what an
+        # audit row needs, and the text itself is already in the store.
+        return {"kind": request.kind, "characters": len(request.content)}
     values = request.model_dump(mode="json", exclude_none=True)
     return {f"has_{name}": True for name in values}
 

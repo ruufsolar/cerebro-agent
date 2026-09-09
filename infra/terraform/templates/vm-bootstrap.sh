@@ -81,6 +81,17 @@ ACCESS_TOKEN=$(curl --fail --silent --show-error --noproxy '*' \
   -H 'Metadata: true' "$IMDS_URL" | jq -er '.access_token')
 [ -n "$ACCESS_TOKEN" ] || fail "managed-identity token was unavailable"
 
+check_env_encoding() {
+  local name=$1
+  local value=$2
+  case "$value" in
+    *$'\n'*|*$'\r'*) fail "Key Vault secret contains a forbidden newline: $name" ;;
+  esac
+  if [[ "$value" == *"\\'"* || "$value" == *"\\" ]]; then
+    fail "Key Vault secret has no lossless env-file encoding: $name"
+  fi
+}
+
 vault_secret() {
   local name=$1
   local value
@@ -88,12 +99,30 @@ vault_secret() {
     -H "Authorization: Bearer $ACCESS_TOKEN" \
     "https://${CEREBRO_KEY_VAULT_NAME}.vault.azure.net/secrets/${name}?api-version=7.4" \
     | jq -er '.value') || fail "required Key Vault secret is unavailable: $name"
-  case "$value" in
-    *$'\n'*|*$'\r'*) fail "Key Vault secret contains a forbidden newline: $name" ;;
+  check_env_encoding "$name" "$value"
+  printf '%s' "$value"
+}
+
+# A secret the vault may not hold yet. Only "not found" and the value "none" mean unset
+# (Key Vault cannot store an empty value, so the seeder writes "none" for one); any other
+# failure is a failure, so an outage cannot quietly switch a feature off.
+optional_vault_secret() {
+  local name=$1
+  local response status body value
+  response=$(curl --silent --show-error --write-out '\n%{http_code}' \
+    -H "Authorization: Bearer $ACCESS_TOKEN" \
+    "https://${CEREBRO_KEY_VAULT_NAME}.vault.azure.net/secrets/${name}?api-version=7.4") \
+    || fail "Key Vault was unreachable while reading: $name"
+  status=${response##*$'\n'}
+  body=${response%$'\n'*}
+  case "$status" in
+    200) ;;
+    404) return 0 ;;
+    *) fail "Key Vault answered HTTP $status for: $name" ;;
   esac
-  if [[ "$value" == *"\\'"* || "$value" == *"\\" ]]; then
-    fail "Key Vault secret has no lossless env-file encoding: $name"
-  fi
+  value=$(printf '%s' "$body" | jq -er '.value') || fail "Key Vault secret is unreadable: $name"
+  [ "$value" != none ] || return 0
+  check_env_encoding "$name" "$value"
   printf '%s' "$value"
 }
 
@@ -119,10 +148,23 @@ READ_REPLICA_URL=$(vault_secret read-replica-url)
 DB_PASSWORD=$(vault_secret cerebro-db-password)
 GLOBAL_MODE=$(vault_secret global-mode)
 IMAGE_TAG=$(vault_secret image-tag)
+# The shared memory of Ruuf's agents (ruufsolar/gru): off until the seeder stores a URL.
+# With the URL absent from the runtime env, Cerebro runs exactly as it did before.
+RUUF_AGENTS_URL=$(optional_vault_secret ruuf-agents-url)
+RUUF_AGENTS_M2M_CLIENT_ID=
+RUUF_AGENTS_M2M_CLIENT_SECRET=
+RUUF_AGENTS_M2M_SCOPE=
+if [ -n "$RUUF_AGENTS_URL" ]; then
+  RUUF_AGENTS_M2M_CLIENT_ID=$(vault_secret ruuf-agents-m2m-client-id)
+  RUUF_AGENTS_M2M_CLIENT_SECRET=$(vault_secret ruuf-agents-m2m-client-secret)
+  RUUF_AGENTS_M2M_SCOPE=$(optional_vault_secret ruuf-agents-m2m-scope)
+fi
 
 [[ "$DB_PASSWORD" =~ ^[A-Za-z0-9]+$ ]] || fail "database password must be alphanumeric"
 [[ "$GLOBAL_MODE" =~ ^(off|shadow|review|apply)$ ]] || fail "global mode is invalid"
 [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9._-]+$ ]] || fail "image tag is invalid"
+[ -z "$RUUF_AGENTS_URL" ] || [[ "$RUUF_AGENTS_URL" =~ ^https://[^[:space:]/]+$ ]] || \
+  fail "shared memory URL must be https://<host> with no path"
 
 old_hash=missing
 if [ -r "$RUNTIME_ENV" ] && [ -r "$COMPOSE_ENV" ]; then
@@ -173,6 +215,14 @@ runtime_tmp=$(mktemp /etc/cerebro-agent/env.XXXXXX)
   write_env_value CEREBRO_RUNTIME_HEARTBEAT_SECONDS 15
   write_env_value CEREBRO_RUNTIME_STALE_SECONDS 45
   write_env_value CEREBRO_PUBLIC_URL http://127.0.0.1:8000
+  if [ -n "$RUUF_AGENTS_URL" ]; then
+    write_env_value RUUF_AGENTS_URL "$RUUF_AGENTS_URL"
+    write_env_value RUUF_AGENTS_M2M_CLIENT_ID "$RUUF_AGENTS_M2M_CLIENT_ID"
+    write_env_value RUUF_AGENTS_M2M_CLIENT_SECRET "$RUUF_AGENTS_M2M_CLIENT_SECRET"
+    if [ -n "$RUUF_AGENTS_M2M_SCOPE" ]; then
+      write_env_value RUUF_AGENTS_M2M_SCOPE "$RUUF_AGENTS_M2M_SCOPE"
+    fi
+  fi
 } > "$runtime_tmp"
 chmod 0600 "$runtime_tmp"
 mv "$runtime_tmp" "$RUNTIME_ENV"

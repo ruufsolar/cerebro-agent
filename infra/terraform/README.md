@@ -175,7 +175,10 @@ its own managed identity.
 ```
 
 The env file must contain the Slack app/bot tokens, Azure OpenAI endpoint/key/deployment,
-and production replica DSN. The script generates a safe Cerebro PostgreSQL password unless
+and production replica DSN. To turn on the shared memory of Ruuf's agents, add
+`RUUF_AGENTS_URL`, `RUUF_AGENTS_M2M_CLIENT_ID` and `RUUF_AGENTS_M2M_CLIENT_SECRET` to it
+(and `RUUF_AGENTS_M2M_SCOPE` if the Authentik provider demands one); an empty
+`RUUF_AGENTS_URL` turns it off, and a file without that line leaves the bridge as it is. The script generates a safe Cerebro PostgreSQL password unless
 one already exists in the vault or `CEREBRO_DB_PASSWORD` is exported. Later rotations reuse
 the existing database password. It does not print any value.
 
@@ -188,6 +191,7 @@ The resulting vault contract is explicit and intentionally small:
 | `read-replica-url` | approved Cerebro `.env` |
 | `cerebro-db-password` | reused from the vault on reseed; generated on first seed; explicit operator override only for a deliberate rotation |
 | `global-mode`, `image-tag` | seeder flags |
+| `ruuf-agents-url`, `ruuf-agents-m2m-client-id`, `ruuf-agents-m2m-client-secret`, `ruuf-agents-m2m-scope` | approved Cerebro `.env`, only when it has a `RUUF_AGENTS_URL` line; `none` stands for an empty value because Key Vault cannot hold one |
 
 If a role assignment has not propagated, wait a few minutes and rerun the exact seeding
 command. Re-running creates new Key Vault secret versions and is safe.

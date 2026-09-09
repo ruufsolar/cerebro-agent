@@ -1,0 +1,7 @@
+# The shared memory of Ruuf's agents, for Codex sessions in this repository.
+# Same server, same token, same tools as `.mcp.json` gives Claude Code.
+#
+# Set RUUF_AGENTS_TOKEN to your Authentik personal access token.
+[mcp_servers.ruuf-agents]
+url = "https://agents.ruuf.solar/mcp"
+bearer_token_env_var = "RUUF_AGENTS_TOKEN"
