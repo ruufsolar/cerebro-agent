@@ -13,7 +13,7 @@ replica is a separate, strictly read-only source.
 | `replica/` | Dedicated connection pool, schema/safety checks, bounded queries and deterministic matching |
 | `db/`, `jobs/` | Alembic models, Procrastinate queues, idempotency and recovery |
 | `ops/`, `evals/` | Readiness, aggregate diagnostics and isolated synthetic evaluations |
-| `knowledge/` | Runtime policy, allowlisted relations, required schema |
+| `knowledge/` | Runtime policy, curated schema guidance and query resource limits |
 | `deploy/`, `infra/terraform/` | Compose/runtime scripts and Azure infrastructure |
 
 There are separate `web`, `slack`, `control-worker`, `agent-worker` and `db` services.
@@ -28,10 +28,14 @@ and image-directory sweeping. Optional Caddy ingress is preparatory, not an impl
 3. An agent job holds the conversation lock. Cancel stale/off work before expensive I/O.
 4. Load at most the latest 30 ordered messages. Download only triggering image IDs, validate
    origin/bytes and keep them in a per-run private temporary directory.
-5. A tool-free structured router classifies the request. Mixed, uncertain, malformed or
-   adversarial classifications use the payment route; only certain general routes bypass it.
-6. The specialist gets its application-selected tools. Router and specialist share the deadline
-   and custom tool budget. Images attach only to the exact triggering user turn.
+5. One tool-free router call classifies the latest request in context. Attribution and mixed
+   requests use payment; topic changes use general. Vague/invalid classifications ask one
+   clarification via the general-reply path without database or memory investigation.
+   Instruction-like source text does not itself change intent.
+6. Both specialists can discover replica-readable application relations and recall shared memory.
+   One specialist-requested route correction is allowed, sharing fourteen total specialist model
+   calls. The final call disables tools and requests a structured answer or clarification.
+   Images attach only to the exact triggering user turn. There is no overall run deadline.
 7. Payment output is evidence-validated and application-rendered; general output is word-bounded.
    Persist result, safe audits, versions, usage and a unique pending output in a transaction.
 8. The control queue rechecks off/staleness, sends in-thread with the output UUID as
@@ -68,12 +72,15 @@ No failure ever falls back to a primary database.
 Workflow entities: `slack_event`, `conversation`, `message`, `agent_run`, `tool_call`,
 `slack_output`, `feedback`, `runtime_heartbeat`, plus Procrastinate's schema.
 Use additive/backward-compatible Alembic migrations; keep the previous deployed image usable.
-Historical result shapes and IDs remain readable. No new schema is needed for the cleanup.
+Historical result shapes and IDs remain readable. Clarification/source/memory audit fields are
+additive JSON fields; no database migration or working-memory table is needed.
 
 Replica startup verifies role privileges, transaction read-only, recovery mode, SSL outside
-local/test, and required relations/columns. SQLGlot resolves CTE scopes before relation checks;
+local/test, and the customer/order identity anchor. Live metadata discovers readable application
+tables/views across schemas; the curated catalog is not an access boundary. SQLGlot resolves
+CTE scopes before relation checks;
 CTE names never grant access to unrelated physical tables. Transactions independently enforce
 read-only, result/row/time limits and restricted functions.
 
 See [operations](operations.md) for drain/rollback and retained data; historical rationale
-remains in [ADRs](adr/012-operational-simplification.md).
+and the current decision is [adaptive investigation](adr/013-adaptive-investigation.md).

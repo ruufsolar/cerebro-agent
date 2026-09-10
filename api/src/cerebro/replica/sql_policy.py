@@ -38,7 +38,12 @@ _FORBIDDEN_NODES = tuple(
 )
 
 
-def validate_readonly_sql(query: str, scope: DataScope) -> ValidatedSql:
+def validate_readonly_sql(
+    query: str,
+    scope: DataScope,
+    *,
+    readable_relations: set[tuple[str, str]] | None = None,
+) -> ValidatedSql:
     stripped = query.strip()
     if not stripped:
         raise SqlPolicyError("query is empty")
@@ -78,17 +83,23 @@ def validate_readonly_sql(query: str, scope: DataScope) -> ValidatedSql:
     for table in statement.find_all(exp.Table):
         if isinstance(table.this, exp.Func):
             raise SqlPolicyError("table functions are not allowed")
-        name = table.name.lower()
-        schema = table.db.lower() if table.db else ""
+        name = table.name if table.this.args.get("quoted") else table.name.lower()
+        db = table.args.get("db")
+        schema = table.db if db is not None and db.args.get("quoted") else table.db.lower()
         if id(table) in cte_references and not schema and not table.catalog:
             continue
-        if table.catalog or schema not in {"", "public"}:
-            raise SqlPolicyError("only public or unqualified relations are allowed")
-        if name.startswith("pg_") or name == "information_schema":
+        if table.catalog:
+            raise SqlPolicyError("cross-database relations are not allowed")
+        if schema.startswith("pg_") or schema == "information_schema":
             raise SqlPolicyError("catalog access is not allowed")
-        if name not in scope.relation_names:
+        allowed = readable_relations
+        if allowed is None:
+            # Compatibility for standalone policy callers; runtime always supplies live grants.
+            allowed = {("public", item) for item in scope.relation_names}
+        if (schema or "public", name) not in allowed:
             raise SqlPolicyError(f"relation is not allowed: {name}")
-        relations.add(name)
+        relations.add(f"{schema}.{name}" if schema else name)
+        table.set("db", exp.to_identifier(schema or "public", quoted=True))
 
     for join in statement.find_all(exp.Join):
         kind = str(join.args.get("kind") or "").upper()

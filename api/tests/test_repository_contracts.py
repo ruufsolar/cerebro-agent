@@ -1,11 +1,18 @@
 import re
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _yaml_mapping(path: Path) -> dict[str, Any]:
+    value = yaml.safe_load(path.read_text())
+    assert isinstance(value, dict)
+    return value
 
 
 @pytest.mark.parametrize(
@@ -57,7 +64,7 @@ def test_consolidated_documentation_links_resolve() -> None:
 
 
 def test_manifest_contains_v0_thread_and_feedback_events() -> None:
-    manifest = yaml.safe_load((REPO_ROOT / "manifest.yaml").read_text())
+    manifest = _yaml_mapping(REPO_ROOT / "manifest.yaml")
     events = set(manifest["settings"]["event_subscriptions"]["bot_events"])
 
     assert {
@@ -71,10 +78,10 @@ def test_manifest_contains_v0_thread_and_feedback_events() -> None:
 
 
 def test_knowledge_scope_is_explicitly_read_only() -> None:
-    scope = yaml.safe_load((REPO_ROOT / "knowledge/data-scope.yaml").read_text())
+    scope = _yaml_mapping(REPO_ROOT / "knowledge/data-scope.yaml")
 
     assert scope["purpose"] == (
-        "internal FinOps payment identification and scoped read-only questions"
+        "internal FinOps investigation with dynamic replica-readable application schemas"
     )
     assert scope["query_limits"]["statements"] == ["SELECT", "WITH"]
     assert "dml" in scope["query_limits"]["forbid"]
@@ -82,7 +89,7 @@ def test_knowledge_scope_is_explicitly_read_only() -> None:
 
 
 def test_compose_isolates_control_and_agent_workers() -> None:
-    compose = yaml.safe_load((REPO_ROOT / "deploy/compose.local.yml").read_text())
+    compose = _yaml_mapping(REPO_ROOT / "deploy/compose.local.yml")
     services = compose["services"]
 
     assert services["control-worker"]["command"] == "python -m cerebro.worker --role control"
@@ -208,7 +215,7 @@ def test_the_proxy_publishes_one_method_on_one_path() -> None:
 
 
 def test_the_ingress_service_only_exists_under_its_profile() -> None:
-    compose = yaml.safe_load((REPO_ROOT / "deploy/compose.yml").read_text())
+    compose = _yaml_mapping(REPO_ROOT / "deploy/compose.yml")
     caddy = compose["services"]["caddy"]
 
     assert caddy["profiles"] == ["ingress"]

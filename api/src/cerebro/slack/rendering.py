@@ -66,6 +66,8 @@ def render_identification(
         ]
         if pending:
             lines.append(f"*No pude verificar:* {pending}")
+        if result.clarification_question:
+            lines.append(_clip_words(" ".join(result.clarification_question.split()), 20))
         return "\n".join(lines)
 
     lines = [
@@ -79,6 +81,8 @@ def render_identification(
         details.append(f"*Falta:* {pending}")
     if details:
         lines.append(" · ".join(details))
+    if result.clarification_question:
+        lines.append(_clip_words(" ".join(result.clarification_question.split()), 20))
     return "\n".join(lines)
 
 

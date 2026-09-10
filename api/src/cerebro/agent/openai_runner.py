@@ -1,6 +1,5 @@
 """OpenAI Agents SDK runner backed by an Azure OpenAI v1 endpoint."""
 
-import asyncio
 import base64
 import logging
 import os
@@ -28,10 +27,13 @@ from cerebro.agent.data_tools import (
     InvestigationCandidate,
     InvestigationData,
     KnowledgeQuery,
+    MemoryRecallQuery,
     PaymentCandidateQuery,
     ReadonlySqlQuery,
     SchemaQuery,
+    SchemaSearchQuery,
     SharedMemoryNote,
+    SourceRecord,
     ToolObservation,
     ToolRequest,
     VambeQuery,
@@ -69,6 +71,7 @@ from cerebro.agent.runner import (
     GeneralAgentRunResult,
     RunnerResult,
 )
+from cerebro.agent.turns import SpecialistTurns, TurnLimitedModel
 from cerebro.config import AppConfig, get_config
 from cerebro.observability import log_event
 from cerebro.replica.database import ReplicaDatabase
@@ -93,6 +96,8 @@ class ModelIdentification(BaseModel):
     recommended_customer: ModelCandidate | None = None
     unable_to_verify: list[UnverifiedField] = Field(default_factory=list, max_length=5)
     alternatives: list[ModelCandidate] = Field(default_factory=list, max_length=3)
+    clarification_question: str | None = Field(default=None, max_length=240)
+    route_correction: RequestKind | None = None
 
 
 class RouteCertainty(StrEnum):
@@ -104,10 +109,8 @@ class ModelRoute(BaseModel):
     request_kind: RequestKind
     certainty: RouteCertainty
     potentially_adversarial: bool = False
-
-
-class ToolBudgetExceeded(RuntimeError):
-    pass
+    clarify: bool = False
+    clarification_question: str | None = Field(default=None, max_length=240)
 
 
 _DIRECT_IDENTITY = {
@@ -136,7 +139,9 @@ _UNVERIFIED_LABELS = {
 
 @dataclass
 class RunState:
-    max_tool_calls: int
+    turns: SpecialistTurns = field(default_factory=lambda: SpecialistTurns(14))
+    requested_route: RequestKind | None = None
+    source_records: dict[str, SourceRecord] = field(default_factory=dict)
     calls: list[ToolAuditRecord] = field(default_factory=list)
     candidate_order_ids: set[str] = field(default_factory=set)
     candidates: dict[tuple[str, str | None], InvestigationCandidate] = field(default_factory=dict)
@@ -163,7 +168,11 @@ class RunState:
             self.candidate_search_count = max(
                 self.candidate_search_count or 0, len(observation.candidates)
             )
-            if isinstance(request, PaymentCandidateQuery):
+            if (
+                isinstance(request, PaymentCandidateQuery)
+                and observation.audit.identity_search_complete
+                and not observation.audit.truncated
+            ):
                 self.candidate_search_conclusive = self.candidate_search_conclusive or bool(
                     any(
                         (
@@ -176,6 +185,9 @@ class RunState:
                         )
                     )
                 )
+        for record in observation.source_records:
+            record.reference = f"src_{len(self.source_records) + 1:03d}"
+            self.source_records[record.reference] = record
         observation.evidence = [self._register_signal(item) for item in observation.evidence]
         for candidate in observation.candidates:
             candidate.evidence = [self._register_signal(item) for item in candidate.evidence]
@@ -191,8 +203,6 @@ class RunState:
 
     async def invoke(self, name: str, request: ToolRequest, call: Any) -> str:
         sequence = len(self.calls) + 1
-        if sequence > self.max_tool_calls:
-            raise ToolBudgetExceeded(f"tool call budget exhausted at {self.max_tool_calls}")
         started = monotonic()
         safe_input = safe_input_summary(request)
         try:
@@ -357,7 +367,7 @@ class OpenAIAgentsRunner:
 
         @function_tool(failure_error_function=None)
         async def describe_database_tables(request: SchemaQuery) -> str:
-            """Describe columnas y gotchas de hasta ocho tablas permitidas antes de escribir SQL."""
+            """Describe columnas, claves y gotchas actuales de hasta ocho relaciones legibles."""
             return await state.invoke(
                 "describe_database_tables", request, data.describe_database_tables
             )
@@ -367,7 +377,35 @@ class OpenAIAgentsRunner:
             """Ejecuta SELECT PostgreSQL acotado por AST, relaciones, funciones, filas y tiempo."""
             return await state.invoke("run_readonly_sql", request, data.run_readonly_sql)
 
-        return [read_finops_knowledge, describe_database_tables, run_readonly_sql]
+        @function_tool(failure_error_function=None)
+        async def search_database_schema(request: SchemaSearchQuery) -> str:
+            """Descubre tablas/vistas por términos de nombre, columnas o descripción; pagina."""
+            return await state.invoke(
+                "search_database_schema", request, data.search_database_schema
+            )
+
+        @function_tool(failure_error_function=None)
+        async def inspect_database_relationships(request: SchemaQuery) -> str:
+            """Inspecciona claves foráneas declaradas; no inventes joins por nombres similares."""
+            return await state.invoke(
+                "inspect_database_relationships", request, data.inspect_database_relationships
+            )
+
+        @function_tool(failure_error_function=None)
+        async def recall_shared_memory(request: MemoryRecallQuery) -> str:
+            """Recuerda guías y joins aprendidos; son orientación, nunca evidencia de pago."""
+            return await state.invoke("recall_shared_memory", request, shared_memory.recall)
+
+        tools = [
+            read_finops_knowledge,
+            search_database_schema,
+            describe_database_tables,
+            inspect_database_relationships,
+            run_readonly_sql,
+        ]
+        if self.shared_memory_enabled:
+            tools.append(recall_shared_memory)
+        return tools
 
     def _memory_tools(self, state: RunState) -> list[Any]:
         """The one tool that writes, and only in the general flow.
@@ -402,6 +440,27 @@ class OpenAIAgentsRunner:
         @function_tool(failure_error_function=None)
         async def verify_payment_candidate(request: VerifyCandidateQuery) -> str:
             """Verifica orden y cuenta por cobrar; es obligatorio antes de recomendar."""
+            if request.source_links:
+                sources = [
+                    state.source_records[link.reference]
+                    for link in request.source_links
+                    if link.reference in state.source_records
+                ]
+                if len(sources) != len(request.source_links):
+
+                    async def unavailable(_: ToolRequest) -> ToolObservation:
+                        return ToolObservation(
+                            source="candidate_verification",
+                            available=False,
+                            summary="Referencia de fuente desconocida en esta ejecución.",
+                        )
+
+                    return await state.invoke("verify_payment_candidate", request, unavailable)
+                return await state.invoke(
+                    "verify_payment_candidate",
+                    request,
+                    lambda query: data.verify_payment_sources(query, sources),
+                )
             return await state.invoke(
                 "verify_payment_candidate", request, data.verify_payment_candidate
             )
@@ -638,6 +697,7 @@ class OpenAIAgentsRunner:
             unable_to_verify=self._unable_to_verify(output, state),
             alternatives=alternatives,
             evidence=evidence,
+            clarification_question=output.clarification_question,
         )
 
     def _map_output(self, output: ModelIdentification, state: RunState) -> PaymentIdentification:
@@ -657,9 +717,11 @@ class OpenAIAgentsRunner:
                     outcome=IdentificationOutcome.NO_CUSTOMER_FOUND,
                     confidence=Confidence.UNKNOWN,
                     investigation_summary=(
-                        "La búsqueda no encontró cuentas por cobrar elegibles que coincidan."
+                        "No encontré coincidencias en las identidades consultadas; "
+                        "esto no descarta otros vínculos con un cliente."
                     ),
                     unable_to_verify=self._unable_to_verify(output, state),
+                    clarification_question=output.clarification_question,
                 )
             return self._ambiguous(
                 output,
@@ -740,11 +802,10 @@ class OpenAIAgentsRunner:
             evidence=grounded,
         )
 
-    def _settings(self, *, reasoning_effort: str, max_tokens: int) -> ModelSettings:
+    def _settings(self, *, reasoning_effort: str) -> ModelSettings:
         settings_kwargs: dict[str, Any] = {
             "parallel_tool_calls": False,
-            "max_tokens": max_tokens,
-            "timeout": float(self.config.agent_timeout_seconds),
+            "timeout": float(self.config.provider_request_timeout_seconds),
         }
         if self.config.azure_openai_use_responses:
             settings_kwargs.update(
@@ -787,9 +848,7 @@ class OpenAIAgentsRunner:
             tool_calls=specialist.tool_calls,
         )
 
-    async def _route(
-        self, items: list[dict[str, Any]]
-    ) -> tuple[RequestKind, AgentUsage, AgentStep]:
+    async def _route(self, items: list[dict[str, Any]]) -> tuple[ModelRoute, AgentUsage, AgentStep]:
         instructions, prompt_version = load_router_prompt()
         agent: Agent[None] = Agent(
             name="Cerebro Router",
@@ -797,7 +856,6 @@ class OpenAIAgentsRunner:
             model=self._model(self.config.azure_deployment_small),
             model_settings=self._settings(
                 reasoning_effort=self.config.router_reasoning_effort,
-                max_tokens=256,
             ),
             output_type=ModelRoute,
             tools=[],
@@ -812,11 +870,15 @@ class OpenAIAgentsRunner:
             route = sdk_result.final_output_as(ModelRoute, raise_if_incorrect_type=True)
         except (MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError, ModelTimeoutError):
             return (
-                RequestKind.PAYMENT_IDENTIFICATION,
+                ModelRoute(
+                    request_kind=RequestKind.GENERAL,
+                    certainty=RouteCertainty.UNCERTAIN,
+                    clarify=True,
+                ),
                 AgentUsage(model=self.config.azure_deployment_small),
                 AgentStep(
                     type="request_classified",
-                    name=RequestKind.PAYMENT_IDENTIFICATION,
+                    name="clarification",
                     status=RouteCertainty.UNCERTAIN,
                     model=self.config.azure_deployment_small,
                     prompt_version=prompt_version,
@@ -824,27 +886,28 @@ class OpenAIAgentsRunner:
             )
         except (TypeError, ValueError):
             return (
-                RequestKind.PAYMENT_IDENTIFICATION,
+                ModelRoute(
+                    request_kind=RequestKind.GENERAL,
+                    certainty=RouteCertainty.UNCERTAIN,
+                    clarify=True,
+                ),
                 AgentUsage(model=self.config.azure_deployment_small),
                 AgentStep(
                     type="request_classified",
-                    name=RequestKind.PAYMENT_IDENTIFICATION,
+                    name="clarification",
                     status=RouteCertainty.UNCERTAIN,
                     model=self.config.azure_deployment_small,
                     prompt_version=prompt_version,
                 ),
             )
-        request_kind = (
-            RequestKind.PAYMENT_IDENTIFICATION
-            if route.potentially_adversarial or route.certainty is RouteCertainty.UNCERTAIN
-            else route.request_kind
-        )
+        if route.certainty is RouteCertainty.UNCERTAIN:
+            route.clarify = True
         return (
-            request_kind,
+            route,
             self._usage(sdk_result, model=self.config.azure_deployment_small),
             AgentStep(
                 type="request_classified",
-                name=request_kind,
+                name="clarification" if route.clarify else route.request_kind,
                 status=(
                     "potentially_adversarial" if route.potentially_adversarial else route.certainty
                 ),
@@ -862,10 +925,9 @@ class OpenAIAgentsRunner:
         agent: Agent[None] = Agent(
             name="Cerebro Payment Investigator",
             instructions=instructions,
-            model=self._model(),
+            model=TurnLimitedModel(self._model(), state.turns),
             model_settings=self._settings(
                 reasoning_effort=self.config.azure_reasoning_effort,
-                max_tokens=self.config.azure_max_output_tokens,
             ),
             output_type=ModelIdentification,
             tools=self._payment_tools(state),
@@ -874,21 +936,16 @@ class OpenAIAgentsRunner:
             sdk_result = await Runner.run(
                 agent,
                 cast(Any, items),
-                max_turns=self.config.max_agent_turns,
+                max_turns=max(1, state.turns.limit - state.turns.used),
                 run_config=self._run_config("Cerebro payment identification"),
             )
         except ModelTimeoutError:
             return _unknown(
-                "La investigación excedió el tiempo permitido.", CompletionReason.TIMEOUT
+                "Una solicitud a Azure excedió su tiempo de espera.", CompletionReason.TIMEOUT
             )
         except MaxTurnsExceeded:
             return _unknown(
                 "La investigación agotó el límite de turnos.", CompletionReason.TURN_LIMIT
-            )
-        except ToolBudgetExceeded:
-            return _unknown(
-                "La investigación agotó el límite de herramientas.",
-                CompletionReason.TOOL_LIMIT,
             )
         except ModelRefusalError:
             return _unknown("El modelo no pudo responder esta solicitud.", CompletionReason.REFUSAL)
@@ -904,6 +961,7 @@ class OpenAIAgentsRunner:
                 "El modelo no produjo una respuesta estructurada válida.",
                 CompletionReason.INVALID_OUTPUT,
             )
+        state.requested_route = output.route_correction
         return AgentRunResult(
             identification=self._map_output(output, state),
             steps=tuple(AgentStep(type="model_response") for _ in sdk_result.raw_responses),
@@ -924,10 +982,9 @@ class OpenAIAgentsRunner:
         agent: Agent[None] = Agent(
             name="Cerebro",
             instructions=instructions,
-            model=self._model(),
+            model=TurnLimitedModel(self._model(), state.turns),
             model_settings=self._settings(
                 reasoning_effort=self.config.azure_reasoning_effort,
-                max_tokens=min(self.config.azure_max_output_tokens, 1_024),
             ),
             output_type=GeneralAnswer,
             tools=[*self._generic_tools(state), *self._memory_tools(state)],
@@ -938,23 +995,18 @@ class OpenAIAgentsRunner:
             sdk_result = await Runner.run(
                 agent,
                 cast(Any, items),
-                max_turns=self.config.max_agent_turns,
+                max_turns=max(1, state.turns.limit - state.turns.used),
                 run_config=self._run_config("Cerebro general conversation"),
             )
         except ModelTimeoutError:
             fallback = (
-                "Se agotó el tiempo antes de que pudiera cerrar la respuesta.",
+                "Una solicitud a Azure excedió su tiempo de espera; no pude cerrar la respuesta.",
                 CompletionReason.TIMEOUT,
             )
         except MaxTurnsExceeded:
             fallback = (
                 "Pensé demasiado y agoté mis turnos. Intenta una pregunta más acotada.",
                 CompletionReason.TURN_LIMIT,
-            )
-        except ToolBudgetExceeded:
-            fallback = (
-                "La consulta agotó el límite de herramientas. Habrá que acotar la ambición.",
-                CompletionReason.TOOL_LIMIT,
             )
         except ModelRefusalError:
             fallback = (
@@ -993,6 +1045,7 @@ class OpenAIAgentsRunner:
                 ),
                 completion_reason=CompletionReason.INVALID_OUTPUT,
             )
+        state.requested_route = output.route_correction
         return GeneralAgentRunResult(
             response=output,
             steps=tuple(AgentStep(type="model_response") for _ in sdk_result.raw_responses),
@@ -1008,7 +1061,7 @@ class OpenAIAgentsRunner:
         payment_instructions, payment_version, payment_knowledge = load_prompt(self.config)
         general_instructions, general_version, general_knowledge = load_general_prompt(self.config)
         items = build_input_items(run_input)
-        state = RunState(max_tool_calls=self.config.max_tool_calls)
+        state = RunState(turns=SpecialistTurns(self.config.max_agent_turns))
         request_kind = RequestKind.PAYMENT_IDENTIFICATION
         router_usage = AgentUsage(model=self.config.azure_deployment_small)
         route_step = AgentStep(
@@ -1018,34 +1071,61 @@ class OpenAIAgentsRunner:
             model=self.config.azure_deployment_small,
             prompt_version=load_router_prompt()[1],
         )
+        accumulated = AgentUsage(model=self.config.azure_deployment_main)
+        correction_steps: list[AgentStep] = []
+        result: RunnerResult = _unknown(
+            "No hubo una respuesta válida.", CompletionReason.INVALID_OUTPUT
+        )
         try:
-            async with asyncio.timeout(self.config.agent_timeout_seconds):
-                request_kind, router_usage, route_step = await self._route(items)
-                if request_kind is RequestKind.GENERAL:
-                    # Above the prompt rather than inside it, and only here: the
-                    # payment flow answers under a versioned policy and gains
-                    # nothing from what ops said in another thread last week.
-                    memory = await shared_memory.load() if self.shared_memory_enabled else None
-                    if memory is not None:
-                        general_instructions = f"{memory.text}\n\n{general_instructions}"
-                        general_knowledge = f"{general_knowledge}+{memory.version}"
-                    result: RunnerResult = await self._run_general(
-                        items, state, general_instructions
-                    )
-                else:
-                    result = await self._run_payment(items, state, payment_instructions)
-        except TimeoutError:
-            if request_kind is RequestKind.GENERAL:
+            route, router_usage, route_step = await self._route(items)
+            request_kind = route.request_kind
+            if route.clarify:
+                request_kind = RequestKind.GENERAL
+                general_version = load_router_prompt()[1]
                 result = GeneralAgentRunResult(
                     response=GeneralAnswer(
-                        answer="Se agotó el tiempo antes de que pudiera cerrar la respuesta."
-                    ),
-                    completion_reason=CompletionReason.TIMEOUT,
+                        answer=route.clarification_question
+                        or "¿Qué necesitas resolver: identificar un pago o consultar otro tema?"
+                    )
                 )
             else:
-                result = _unknown(
-                    "La investigación excedió el tiempo permitido.", CompletionReason.TIMEOUT
-                )
+                memory = await shared_memory.load() if self.shared_memory_enabled else None
+                if memory is not None:
+                    general_instructions = f"{memory.text}\n\n{general_instructions}"
+                    payment_instructions = f"{memory.text}\n\n{payment_instructions}"
+                    general_knowledge = f"{general_knowledge}+{memory.version}"
+                    payment_knowledge = f"{payment_knowledge}+{memory.version}"
+                for attempt in range(2):
+                    state.requested_route = None
+                    used_before = state.turns.used
+                    if request_kind is RequestKind.GENERAL:
+                        result = await self._run_general(items, state, general_instructions)
+                    else:
+                        result = await self._run_payment(items, state, payment_instructions)
+                    accumulated = self._combined_usage(accumulated, result.usage)
+                    state.turns.used = max(state.turns.used, used_before + result.usage.turns)
+                    target = state.requested_route
+                    if target is None or target is request_kind:
+                        break
+                    correction_steps.append(
+                        AgentStep(
+                            type="route_correction",
+                            name=target,
+                            status="requested",
+                            model=self.config.azure_deployment_main,
+                            prompt_version=general_version
+                            if request_kind is RequestKind.GENERAL
+                            else payment_version,
+                        )
+                    )
+                    if attempt or state.turns.used >= state.turns.limit:
+                        request_kind = RequestKind.PAYMENT_IDENTIFICATION
+                        result = _unknown(
+                            "No pude aclarar el objetivo dentro de los turnos disponibles.",
+                            CompletionReason.TURN_LIMIT,
+                        )
+                        break
+                    request_kind = target
         except Exception as exc:
             prompt_version = (
                 general_version if request_kind is RequestKind.GENERAL else payment_version
@@ -1060,14 +1140,15 @@ class OpenAIAgentsRunner:
                 knowledge_version=knowledge_version,
                 request_kind=request_kind,
             ) from exc
-        specialist_usage = result.usage.model_copy(
-            update={
-                "model": result.usage.model or self.config.azure_deployment_main,
-                "tool_calls": len(state.calls),
-            }
+        specialist_usage = AgentUsage(
+            model=self.config.azure_deployment_main,
+            input_tokens=max(accumulated.input_tokens or 0, state.turns.input_tokens),
+            output_tokens=max(accumulated.output_tokens or 0, state.turns.output_tokens),
+            turns=state.turns.used,
+            tool_calls=len(state.calls),
         )
         usage = self._combined_usage(router_usage, specialist_usage)
-        steps = (route_step, *result.steps)
+        steps = (route_step, *correction_steps, *result.steps)
         if isinstance(result, GeneralAgentRunResult):
             return GeneralAgentRunResult(
                 response=result.response,

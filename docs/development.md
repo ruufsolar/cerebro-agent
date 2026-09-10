@@ -38,6 +38,14 @@ Do not run local integration tests against production credentials/data.
 6. Test a PNG/JPEG/WebP, a partially invalid attachment batch, and a general question.
    Confirm explicit missing-image counts and no residual run files under `/tmp/cerebro-images`.
 7. Check `docker compose -f deploy/compose.local.yml ps` and safe service logs.
+8. Check a vague “¿me ayudas?” asks one question without tools; change topic in a payment
+   thread and verify general routing. A clear payment request must still use validated evidence.
+9. With a synthetic extra schema, confirm metadata discovery, SQL paging and a declared source
+   relationship. Test absent/stale memory advice and paid-account history without implying collection.
+
+Adaptive regression tests exercise the real SDK with a scripted model through fourteen turns,
+including a late route correction and tool-free finalization. Provider calls retain a 180-second
+individual timeout; total elapsed investigation time is intentionally not bounded.
 
 No Tailscale/public tunnel is needed for outbound Socket Mode. Replica networking may separately
 require an approved private-network route; never open the DB publicly just for convenience.

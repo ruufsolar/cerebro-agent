@@ -80,6 +80,7 @@ class EvidenceSignal(BaseModel):
     description: str = Field(max_length=240)
     order_id: str | None = None
     account_receivable_id: str | None = None
+    source_reference: str | None = None
 
 
 class CompletionReason(StrEnum):
@@ -103,6 +104,7 @@ class GeneralAnswer(BaseModel):
     """Free-form conversational result with only a small transport-level contract."""
 
     answer: str = Field(min_length=1, max_length=4_000)
+    route_correction: RequestKind | None = Field(default=None, exclude=True)
 
 
 class PaymentIdentification(BaseModel):
@@ -116,6 +118,7 @@ class PaymentIdentification(BaseModel):
     unable_to_verify: list[str] = Field(default_factory=list)
     alternatives: list[CustomerCandidate] = Field(default_factory=list, max_length=3)
     evidence: list[EvidenceSignal] = Field(default_factory=list)
+    clarification_question: str | None = Field(default=None, max_length=240)
 
     @model_validator(mode="before")
     @classmethod

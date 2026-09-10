@@ -67,7 +67,7 @@ class KnowledgeBundle(BaseModel):
             raise ValueError("data scope and schema catalog versions differ")
         missing = self.scope.relation_names - set(self.catalog.relations)
         if missing:
-            raise ValueError(f"schema catalog is missing allowed relations: {sorted(missing)}")
+            raise ValueError(f"schema catalog is missing curated relations: {sorted(missing)}")
         return self
 
 

@@ -59,7 +59,8 @@ async def test_synthetic_replica_supports_the_complete_readonly_investigation() 
         signee_candidates = await data.search_payment_candidates(
             PaymentCandidateQuery(transferor_name="Claudio Montecinos")
         )
-        assert signee_candidates.audit.row_count == 1
+        assert signee_candidates.audit.row_count == 2
+        assert len(signee_candidates.candidates) == 1
         assert EvidenceKind.SIGNEE_NAME in {
             signal.kind for signal in signee_candidates.candidates[0].evidence
         }

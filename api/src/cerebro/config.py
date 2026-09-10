@@ -53,14 +53,12 @@ class AppConfig(BaseSettings):
     azure_openai_use_responses: bool = True
     azure_reasoning_effort: str = "medium"
     router_reasoning_effort: str = "low"
-    azure_max_output_tokens: int = Field(default=4_096, ge=256, le=32_768)
+    provider_request_timeout_seconds: int = Field(default=180, ge=10, le=900)
     general_max_words: int = Field(default=180, ge=40, le=500)
 
     global_mode: GlobalMode = GlobalMode.OFF
 
-    max_agent_turns: int = Field(default=8, ge=1, le=30)
-    max_tool_calls: int = Field(default=20, ge=1, le=100)
-    agent_timeout_seconds: int = Field(default=180, ge=10, le=900)
+    max_agent_turns: int = Field(default=14, ge=2, le=30)
     sql_max_rows: int = Field(default=200, ge=1, le=1_000)
     max_images: int = Field(default=4, ge=1, le=10)
     max_image_bytes: int = Field(default=8 * 1024 * 1024, ge=1_024)

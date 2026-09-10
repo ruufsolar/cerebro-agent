@@ -206,7 +206,6 @@ async def operational_watchdog(timestamp: int) -> None:
     values = {
         "stale_events": stale_events or 0,
         "stale_queued_runs": stale_queued_runs or 0,
-        "stale_running_runs": stale_running_runs or 0,
         "stale_outputs": stale_outputs or 0,
         "failed_count": (failed_runs or 0) + (failed_events or 0) + (failed_outputs or 0),
         "stale_components": stale_components or 0,
@@ -217,3 +216,10 @@ async def operational_watchdog(timestamp: int) -> None:
         level=logging.WARNING if any(values.values()) else logging.INFO,
         **values,
     )
+    if stale_running_runs:
+        log_event(
+            logger,
+            "long_running_investigations",
+            level=logging.INFO,
+            stale_running_runs=stale_running_runs,
+        )

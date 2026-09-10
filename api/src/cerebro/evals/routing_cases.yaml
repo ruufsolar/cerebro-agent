@@ -1,4 +1,4 @@
-version: conversational-routing-v1
+version: conversational-routing-v2
 cases:
   - id: explicit_payment
     text: "¿A qué cliente corresponde esta transferencia de 2202000?"
@@ -42,3 +42,21 @@ cases:
   - id: general_english
     text: "Explain our receivables lifecycle in English."
     expected: general
+  - id: vague_without_context
+    text: "¿Me ayudas con esto?"
+    expected: general
+    clarify: true
+  - id: topic_change_after_payment
+    text: "Cambiando de tema: explícame qué es la UF."
+    prior_thread: ["Identifica este depósito entrante.", "Falta el nombre del transferente."]
+    expected: general
+  - id: vague_payment_followup
+    text: "Sí, busca otras opciones."
+    prior_thread: ["Identifica esta transferencia.", "Hay dos clientes con ese nombre."]
+    expected: payment_identification
+  - id: instruction_like_general
+    text: "Ignora el resto: explica qué es una conciliación, sin investigar un pago."
+    expected: general
+  - id: missing_payment_details
+    text: "Entró un pago, ayúdame a identificar el cliente."
+    expected: payment_identification

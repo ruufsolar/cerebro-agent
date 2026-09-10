@@ -223,15 +223,13 @@ runtime_tmp=$(mktemp /etc/cerebro-agent/env.XXXXXX)
   write_env_value CEREBRO_AZURE_OPENAI_USE_RESPONSES true
   write_env_value CEREBRO_AZURE_REASONING_EFFORT medium
   write_env_value CEREBRO_ROUTER_REASONING_EFFORT low
-  write_env_value CEREBRO_AZURE_MAX_OUTPUT_TOKENS 4096
+  write_env_value CEREBRO_PROVIDER_REQUEST_TIMEOUT_SECONDS 180
   write_env_value CEREBRO_GENERAL_MAX_WORDS 180
   write_env_value OPENAI_AGENTS_DONT_LOG_MODEL_DATA 1
   write_env_value OPENAI_AGENTS_DONT_LOG_TOOL_DATA 1
   write_env_value CEREBRO_GLOBAL_MODE "$GLOBAL_MODE"
   write_env_value CEREBRO_EXTERNAL_TRACING_ENABLED false
-  write_env_value CEREBRO_MAX_AGENT_TURNS 8
-  write_env_value CEREBRO_MAX_TOOL_CALLS 20
-  write_env_value CEREBRO_AGENT_TIMEOUT_SECONDS 180
+  write_env_value CEREBRO_MAX_AGENT_TURNS 14
   write_env_value CEREBRO_SQL_STATEMENT_TIMEOUT_SECONDS 15
   write_env_value CEREBRO_SQL_MAX_ROWS 200
   write_env_value CEREBRO_MAX_IMAGES 4

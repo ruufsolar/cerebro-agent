@@ -202,6 +202,14 @@ def test_pilot_accepts_grounded_customer_claim() -> None:
 
     assert "unsupported_evidence" not in report["cases"][0]["errors"]
 
+    result.evidence[0].source_reference = "src_001"
+    row.run.structured_result = result.model_dump(mode="json")
+    report = grade_rows([row])
+    assert "unsupported_evidence" in report["cases"][0]["errors"]
+    row.tools[0].output = {"source_references": ["src_001"]}
+    report = grade_rows([row])
+    assert "unsupported_evidence" not in report["cases"][0]["errors"]
+
 
 def test_pilot_rejects_missing_cases_images_labels_and_usage_limits() -> None:
     rows = [_case(index, image=index < 3) for index in range(9)]

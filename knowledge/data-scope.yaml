@@ -1,8 +1,8 @@
-version: 5
+version: 6
 schema_version: 4
 last_reviewed: 2026-09-07
 owner: finops
-purpose: internal FinOps payment identification and scoped read-only questions
+purpose: internal FinOps investigation with dynamic replica-readable application schemas
 
 candidate_defaults:
   debtor_type: client
@@ -16,6 +16,7 @@ candidate_defaults:
 
 pii_allowed_for_internal_use: [rut, bank_account, phone, email, address]
 
+# Curated starting points, not a runtime permission allowlist.
 relations:
   - {name: user, reason: customer identity and relationships}
   - {name: personal_details, reason: legal name and RUT matching}
@@ -65,4 +66,4 @@ query_limits:
   vambe_max_messages: 50
   schema_descriptions_per_call: 8
   safe_functions: [abs, avg, btrim, cast, ceil, coalesce, concat, concat_ws, count, date_trunc, floor, greatest, immutable_unaccent, least, lower, max, min, nullif, regexp_replace, replace, round, similarity, sum, trim, upper]
-  forbid: [multiple_statements, ddl, dml, procedures, select_for_update, select_into, copy, recursive_cte, table_functions, catalog_access, cartesian_joins, select_star, unallowlisted_relations]
+  forbid: [multiple_statements, ddl, dml, procedures, select_for_update, select_into, copy, recursive_cte, table_functions, catalog_access, cartesian_joins, select_star, unreadable_relations]

@@ -22,6 +22,32 @@ class ToolAuditMetadata(BaseModel):
     referenced_relations: list[str] = Field(default_factory=list)
     row_count: int | None = None
     truncated: bool | None = None
+    memory_ids: list[str] = Field(default_factory=list)
+    memory_version: str | None = None
+    source_references: list[str] = Field(default_factory=list)
+    # A scoped/partial discovery is never enough to rule out a customer.
+    identity_search_complete: bool = False
+
+
+class RecordKey(BaseModel):
+    column: str = Field(min_length=1, max_length=128)
+    value: str = Field(max_length=500)
+
+
+class SourceRecordQuery(BaseModel):
+    relation: str = Field(min_length=1, max_length=260)
+    keys: list[RecordKey] = Field(min_length=1, max_length=8)
+
+
+class SourceRecord(BaseModel):
+    reference: str = ""
+    record: SourceRecordQuery
+
+
+class SourceLink(BaseModel):
+    reference: str
+    # Ordered, declared FK identifiers from inspect_database_relationships.
+    relationship_path: list[str] = Field(default_factory=list, max_length=8)
 
 
 class InvestigationCandidate(BaseModel):
@@ -43,6 +69,7 @@ class ToolObservation(BaseModel):
     candidates: list[InvestigationCandidate] = Field(default_factory=list)
     evidence: list[EvidenceSignal] = Field(default_factory=list)
     rows: list[dict[str, object]] = Field(default_factory=list)
+    source_records: list[SourceRecord] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
     audit: ToolAuditMetadata = Field(default_factory=ToolAuditMetadata, exclude=True)
 
@@ -61,6 +88,10 @@ class ToolObservation(BaseModel):
             "truncated": self.audit.truncated,
             "limitation_count": len(self.limitations),
             "evidence_kinds": evidence_kinds,
+            "source_reference_count": len(self.source_records),
+            "memory_ids": self.audit.memory_ids,
+            "memory_version": self.audit.memory_version,
+            "source_references": self.audit.source_references,
         }
 
 
@@ -75,6 +106,17 @@ class KnowledgeQuery(BaseModel):
 
 class SchemaQuery(BaseModel):
     names: list[str] = Field(min_length=1, max_length=8)
+
+
+class SchemaSearchQuery(BaseModel):
+    query: str = Field(default="", max_length=200)
+    offset: int = Field(default=0, ge=0, le=100_000)
+    limit: int = Field(default=20, ge=1, le=50)
+
+
+class MemoryRecallQuery(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    limit: int = Field(default=5, ge=1, le=10)
 
 
 class PaymentCandidateQuery(BaseModel):
@@ -111,6 +153,7 @@ class VerifyCandidateQuery(BaseModel):
     currency: Literal["CLP", "USD", "CLF"] | None = None
     transferor_name: str | None = Field(default=None, max_length=300)
     address: str | None = Field(default=None, max_length=500)
+    source_links: list[SourceLink] = Field(default_factory=list, max_length=4)
 
 
 class VambeQuery(BaseModel):
@@ -131,6 +174,8 @@ class VambeQuery(BaseModel):
 
 class ReadonlySqlQuery(BaseModel):
     query: str = Field(min_length=1, max_length=10_000)
+    offset: int = Field(default=0, ge=0, le=100_000)
+    source_records: list[SourceRecordQuery] = Field(default_factory=list, max_length=4)
 
 
 class SharedMemoryNote(BaseModel):
@@ -157,10 +202,14 @@ ToolRequest = (
     | VambeQuery
     | ReadonlySqlQuery
     | SharedMemoryNote
+    | SchemaSearchQuery
+    | MemoryRecallQuery
 )
 
 
 def safe_input_summary(request: ToolRequest) -> dict[str, object]:
+    if isinstance(request, SchemaSearchQuery | MemoryRecallQuery):
+        return {"query_characters": len(request.query), "limit": request.limit}
     if isinstance(request, ReadonlySqlQuery):
         return {"query_present": True, "query_characters": len(request.query)}
     if isinstance(request, SchemaQuery):
@@ -183,6 +232,14 @@ class InvestigationData(Protocol):
     async def read_finops_knowledge(self, request: KnowledgeQuery) -> ToolObservation: ...
 
     async def describe_database_tables(self, request: SchemaQuery) -> ToolObservation: ...
+
+    async def search_database_schema(self, request: SchemaSearchQuery) -> ToolObservation: ...
+
+    async def inspect_database_relationships(self, request: SchemaQuery) -> ToolObservation: ...
+
+    async def verify_payment_sources(
+        self, request: VerifyCandidateQuery, sources: list[SourceRecord]
+    ) -> ToolObservation: ...
 
     async def search_payment_candidates(
         self, request: PaymentCandidateQuery
@@ -218,6 +275,20 @@ class EmptyInvestigationData:
     async def describe_database_tables(self, request: SchemaQuery) -> ToolObservation:
         del request
         return self._unavailable("database_schema")
+
+    async def search_database_schema(self, request: SchemaSearchQuery) -> ToolObservation:
+        del request
+        return self._unavailable("database_schema")
+
+    async def inspect_database_relationships(self, request: SchemaQuery) -> ToolObservation:
+        del request
+        return self._unavailable("database_relationships")
+
+    async def verify_payment_sources(
+        self, request: VerifyCandidateQuery, sources: list[SourceRecord]
+    ) -> ToolObservation:
+        del sources
+        return await self.verify_payment_candidate(request)
 
     async def search_payment_candidates(self, request: PaymentCandidateQuery) -> ToolObservation:
         del request
@@ -256,6 +327,14 @@ class FixtureInvestigationData(EmptyInvestigationData):
     async def describe_database_tables(self, request: SchemaQuery) -> ToolObservation:
         del request
         return self._get("database_schema")
+
+    async def search_database_schema(self, request: SchemaSearchQuery) -> ToolObservation:
+        del request
+        return self._get("database_schema")
+
+    async def inspect_database_relationships(self, request: SchemaQuery) -> ToolObservation:
+        del request
+        return self._get("database_relationships")
 
     async def search_payment_candidates(self, request: PaymentCandidateQuery) -> ToolObservation:
         observation = self._get("payment_candidates")

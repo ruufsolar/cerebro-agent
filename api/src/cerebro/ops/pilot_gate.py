@@ -106,6 +106,14 @@ def _unsupported(result: PaymentIdentification, tools: list[ToolCall]) -> bool:
             expected_tool = _SOURCE_TO_TOOL.get(signal.source.value)
             if expected_tool is None or expected_tool not in successful_tools:
                 return True
+            if signal.source_reference and not any(
+                tool.tool_name == "verify_payment_candidate"
+                and tool.status == "succeeded"
+                and isinstance(tool.output, dict)
+                and signal.source_reference in tool.output.get("source_references", [])
+                for tool in tools
+            ):
+                return True
     return False
 
 

@@ -12,8 +12,10 @@ certification or pilot has passed.
 - General conversation and read-only FinOps questions, with Cerebro's restrained personality.
 - Native progress status, durable jobs/outbox, 🧀/🔌 feedback, local operational reports.
 - Azure VM/Compose deployment with the existing senior-maintained automatic delivery.
-- Optional shared agent memory for general conversation. This is an external side effect,
-  unlike replica reads; it does not authorize payment or hold changes.
+- Optional shared-memory brief/recall for both routes; only general retains its existing note
+  writing. Memory writes are external effects and do not authorize payment or hold changes.
+- Full replica-readable application schema discovery on both routes, with fourteen specialist
+  turns and one possible route correction sharing that budget.
 
 ## Operating modes
 
@@ -36,9 +38,10 @@ exact outstanding amount, then contextual Vambe evidence. Contradictions overrid
 - `matched`: one verified customer, high or medium confidence. Prefer an eligible receivable;
   a robust unique identity can match without one, but say the receivable could not be verified.
 - `ambiguous`: no recommendation, optionally up to three verified plausible alternatives.
-- `no_customer_found`: an available, conclusive identity search found no eligible candidate.
-  This does not mean supplier payment, refund, or internal transfer. Amount-only searches
-  cannot establish this conclusively.
+- `no_customer_found`: a complete, available canonical identity search using precise identifying
+  input found no match. The reply limits its claim to identities searched, not all possible
+  customer links. Narrow, truncated, name-only or amount-only discovery instead remains ambiguous.
+  This never means supplier payment, refund, or internal transfer.
 - Legacy stored `out_of_scope` results still decode; general requests now have their own route.
 
 High requires a complete normalized installation address, including complete numeric tokens,
@@ -50,12 +53,16 @@ uncancelled client-debtor/Ruuf-recipient ARs tied to eligible installations with
 Smaller amounts may be partial payments; larger amounts or currency mismatches contradict that AR.
 CLP, USD and CLF (UF) are distinct. No FX conversion or global scan of all larger ARs.
 The first transfer without a glosa and from a third-party name may correctly remain “no sé”.
+Receivable eligibility is a collection rule, not an investigation filter: paid/cancelled history
+and identities without eligible receivables remain searchable, but are never described as collectible.
 
 ## Slack response and privacy
 
 Payment replies start with `Resultado`, with no banner. Include a verified customer/CRM link
 when available, a readable AR description, categorical confidence, a short “Por qué” and
 important missing checks. No raw database identifiers or tool-by-tool narration.
+Payment ambiguity may include one discriminating clarification question after searching available
+evidence. Requests too vague to route get a short general-reply clarification without investigation.
 
 - Match: at most six nonempty lines and about 110 Spanish words.
 - Ambiguous/no customer: at most four lines and 75 words; alternatives may raise the word cap to 130.

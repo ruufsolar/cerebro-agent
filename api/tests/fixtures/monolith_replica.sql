@@ -55,6 +55,21 @@ INSERT INTO chile_bank_account VALUES ('f0000000-0000-0000-0000-000000000001', '
 INSERT INTO certification_user VALUES ('11000000-0000-0000-0000-000000000001', '70000000-0000-0000-0000-000000000001', 'f0000000-0000-0000-0000-000000000001', 'María', 'Solar', '11.111.111-1', '+56911111111', 'maria@example.test');
 INSERT INTO vambe_message VALUES ('12000000-0000-0000-0000-000000000001', now(), 'inbound', 'text', 'Envié el comprobante del pago de 700000', '+56911111111', NULL, '00000000-0000-0000-0000-000000000001', 'sent', NULL, NULL);
 
+CREATE SCHEMA ops;
+CREATE TABLE ops.payer_reference (
+  id uuid PRIMARY KEY, "fullName" text NOT NULL,
+  "orderId" uuid NOT NULL CONSTRAINT payer_order_fk REFERENCES public."order"(id)
+);
+INSERT INTO ops.payer_reference VALUES (
+  '13000000-0000-0000-0000-000000000001', 'Emilia Pinto Vega',
+  '50000000-0000-0000-0000-000000000001'
+);
+COMMENT ON TABLE ops.payer_reference IS 'Synthetic third-party payer references';
+CREATE VIEW ops.payer_view AS SELECT id, "fullName", "orderId" FROM ops.payer_reference;
+GRANT USAGE ON SCHEMA ops TO cerebro_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA ops TO cerebro_reader;
+CREATE TABLE ops.unreadable (id uuid PRIMARY KEY);
+
 GRANT USAGE ON SCHEMA public TO cerebro_reader;
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO cerebro_reader;
 ALTER ROLE cerebro_reader SET default_transaction_read_only = on;

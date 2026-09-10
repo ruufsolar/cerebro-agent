@@ -48,12 +48,32 @@ and confirmation it is a dedicated read-only replica role. DSN:
 Percent-encode username/password components, not the entire URI; follow stricter TLS/CA settings
 required by platform. Store as `CEREBRO_READ_REPLICA_URL`.
 
-Allow CONNECT, schema USAGE and SELECT only on reviewed relations; default transaction read-only,
+Allow CONNECT, USAGE on each application schema, and SELECT on all application tables/views the
+role should expose. This role is now the access boundary for **both** specialists; review it
+accordingly. Do not grant PostgreSQL catalog roles or any business writes. Default transaction read-only,
 small connection limit and short statement/lock/idle timeouts. Startup verifies no unsafe role
-privileges, physical recovery mode, and the schema catalog. A local synthetic DB is intentionally
+privileges, physical recovery mode, readable relations, and the order identity anchor. Optional
+shortcut dependencies missing from the replica report source-unavailable instead of blocking
+exploratory SQL. A local synthetic DB is intentionally
 not a replica: `CEREBRO_ALLOW_NON_REPLICA_READONLY_DB=true` is permitted only in local/test.
 Run `python -m cerebro.replica.check`; expected safety/schema checks must pass.
 Give platform Terraform's stable NAT `outbound_public_ip` for source allowlisting.
+
+An operator must apply grants through the writer's approved administration workflow (never
+through Cerebro or a read replica). Example placeholders, reviewed for each application schema:
+
+```sql
+GRANT CONNECT ON DATABASE application_db TO cerebro_reader;
+GRANT USAGE ON SCHEMA application_schema TO cerebro_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA application_schema TO cerebro_reader;
+ALTER DEFAULT PRIVILEGES FOR ROLE table_owner IN SCHEMA application_schema
+  GRANT SELECT ON TABLES TO cerebro_reader;
+```
+
+Default privileges apply only to objects subsequently created by that owner; repeat for every
+owner and arrange USAGE/default grants for future schemas. No grant is changed by this code.
+Live discovery refreshes its metadata cache after 60 seconds. Specialized identity helpers
+still use monolith `public` relations; exploratory SQL supports any readable application schema.
 
 Vambe text is stored in `vambe_message`; historical media is unavailable. There is no implemented
 generic payment mailbox source. `pagos@ruuf.cl` and `pagos@ruuf.solar` are aliases;
@@ -62,11 +82,12 @@ code convention is the latter. CRM links are built from verified order IDs at
 
 ## Shared agent memory
 
-Optional general-route integration uses the shared Ruuf agent service and Authentik M2M.
+Optional brief/targeted recall on both routes uses the shared Ruuf agent service and Authentik M2M.
 See `api/src/cerebro/agent/shared_memory.py` for configuration/cache/failure handling.
 The generated `memory_client.py` belongs to the upstream agent platform; change that source
 upstream, not manually here. Shared memories are untrusted context, not payment evidence or
-permission to write business records. Malformed/unavailable briefs don't break general replies.
+permission to write business records. Malformed/unavailable memory doesn't break investigation.
+Only general keeps the existing note-writing tool; payment gets no new write capability.
 Synthetic evals/preflight explicitly disable memory reads **and writes**.
 
 ## Public bank ingress: infrastructure only

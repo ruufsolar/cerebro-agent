@@ -8,11 +8,17 @@ checks usefulness in actual work. None automatically retrains or rewrites Cerebr
 CI is offline: scripted model outputs, fake Slack, synthetic tool observations and disposable
 PostgreSQL prove routing fallback, grounding, budgets, SQL boundaries, modes, outbox and cleanup.
 Mocked routing labels do not establish real model accuracy.
+Adaptive tests cover contextual topic changes, one-question routing clarifications, shared turn
+accounting across correction, final-turn tool disabling, live schema metadata on synthetic
+PostgreSQL, source re-reads, fake SQL literals/joins, and memory-only evidence rejection.
 
 `api/src/cerebro/evals/cases.yaml` contains twenty anonymized payment/general cases: addresses,
 name collisions, 70/30 and partial payments, third-party transfers, currencies, contradictions,
 unavailable sources and injection (including images/Vambe). Routing examples are maintained
 separately under `evals/`.
+The `adaptive-v1` corpus preserves twenty cases and the same quality thresholds, but now expects
+historical customer attribution without collection authority and abstention for empty narrow
+name/wording searches. These are deliberate behavior changes, not new ground truth from production.
 
 From `api/`:
 ```bash
@@ -54,8 +60,10 @@ Reports label cases `case_01`, etc.; no names, message text, order IDs or paymen
 Checks retain single sent investigation per trigger, resolved feedback, supported evidence/source
 tool names, response-length contracts, successful runs/deliveries and no timeouts.
 They inspect stored metadata; they are not an independent reconstruction of the replica truth.
+Exploratory evidence additionally requires its source reference in a successful verification audit.
 Latency: median at most 60s, nearest-rank p95 at most 120s. Average input/output tokens:
 50,000/1,000; per-run maxima: 100,000/2,000. Exit codes: 0 pass, 1 quality failure, 2 usage/config error.
+These are reporting thresholds, not execution limits; adaptive investigations can exceed them.
 
 ## Feedback loop
 

@@ -7,7 +7,7 @@ from uuid import UUID
 import asyncpg
 import pytest
 
-from cerebro.agent.data_tools import PaymentCandidateQuery, VambeQuery
+from cerebro.agent.data_tools import PaymentCandidateQuery, VambeQuery, VerifyCandidateQuery
 from cerebro.agent.models import EvidenceKind
 from cerebro.config import AppConfig
 from cerebro.replica.database import QueryResult, ReplicaDatabase
@@ -48,6 +48,36 @@ async def test_vambe_text_hit_never_becomes_payment_confirmation() -> None:
     )
     result = await data.search_vambe_messages(VambeQuery(order_id=UUID(int=2), query="pago"))
     assert [signal.kind for signal in result.evidence] == [EvidenceKind.VAMBE_MENTION]
+
+
+@pytest.mark.parametrize("hint", ["Pago Calle Antigua 42 Santiago", "Eva Prueba"])
+async def test_historical_identity_is_searchable_without_collectible_receivable(hint: str) -> None:
+    class HistoricalDatabase:
+        async def fetch_bounded(self, query: str, *args: object, **kwargs: object) -> QueryResult:
+            if "WITH eligible AS" in query or "WITH scored AS" in query:
+                return QueryResult((), (), 0, False)
+            # No active receivable; a customer identity and historical installation remain.
+            row = {
+                "customer_name": "Eva Prueba",
+                "order_id": str(UUID(int=4)),
+                "order_number": 44,
+                "full_address": "Calle Antigua 42 Santiago",
+            }
+            return QueryResult(tuple(row), (row,), 1, False)
+
+    data = ReplicaInvestigationData(
+        cast(ReplicaDatabase, HistoricalDatabase()), load_knowledge(KNOWLEDGE_DIR), KNOWLEDGE_DIR
+    )
+    discovered = await data.search_payment_candidates(PaymentCandidateQuery(glosa_or_address=hint))
+    assert len(discovered.candidates) == 1
+    assert discovered.candidates[0].account_receivable_id is None
+    verified = await data.verify_payment_candidate(
+        VerifyCandidateQuery(order_id=UUID(int=4), address=hint)
+    )
+    assert verified.candidates[0].verified
+    assert verified.candidates[0].account_receivable_id is None
+    assert verified.candidates[0].outstanding_amount is None
+    assert verified.limitations
 
 
 class _Context:
@@ -115,8 +145,9 @@ class _CandidateDatabase:
         self, query: str, *args: object, max_rows: int | None = None
     ) -> QueryResult:
         assert max_rows == 20
-        self.query = query
-        self.args = args
+        if not self.query:
+            self.query = query
+            self.args = args
         row = {
             "customer_name": "Alberto Amigo",
             "customer_rut": None,
@@ -190,7 +221,7 @@ async def test_candidate_search_stages_enrichment_and_uses_name_tokens_from_glos
     )
 
     assert "matched AS" in database.query
-    assert "LIMIT 20" in database.query
+    assert "LIMIT 21" in database.query
     assert "payment_aggregates" not in database.query
     assert ["amigo"] in database.args
     assert observation.candidates[0].customer_name == "Alberto Amigo"

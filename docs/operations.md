@@ -70,9 +70,19 @@ One VM/local PostgreSQL is not HA. Verify restore separately; do not treat a bac
   outbox, not raw Slack event dumps.
 
 The five-minute watchdog logs aggregate warnings for pending events/outputs >2min, queued runs
->5min, running runs >240s, recent failures and stale components. No external alerts/PostHog.
+>5min, recent failures and stale components. Running investigations over 240s are informational,
+not stalled solely because of age. Heartbeats and delivery failures still signal unhealthy work.
+No external alerts/PostHog.
 JSON logs allow lifecycle IDs/categories/counts/versions only; optional local text format keeps
 the same privacy boundary. Never log exception messages, secrets, text, SQL/results or images.
+
+Adaptive rollout: explicitly set `CEREBRO_MAX_AGENT_TURNS=14` if the runtime file still overrides
+the old default with 8. Replace obsolete `CEREBRO_AGENT_TIMEOUT_SECONDS`,
+`CEREBRO_MAX_TOOL_CALLS`, and `CEREBRO_AZURE_MAX_OUTPUT_TOKENS` with
+`CEREBRO_PROVIDER_REQUEST_TIMEOUT_SECONDS=180` (per request). Keep configured deployments and
+reasoning unchanged. There is no overall time/token cap; monitor usage and queue latency.
+The senior-maintained update script still drains for 240 seconds and aborts on unfinished work;
+longer healthy investigations can therefore postpone an update. Do not force-stop them to deploy.
 
 ## Secrets and retained data
 

@@ -9,7 +9,12 @@ from uuid import UUID, uuid4
 
 import pytest
 from agents import RunConfig
-from agents.exceptions import MaxTurnsExceeded, ModelBehaviorError, ModelRefusalError
+from agents.exceptions import (
+    MaxTurnsExceeded,
+    ModelBehaviorError,
+    ModelRefusalError,
+    ModelTimeoutError,
+)
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_responses import OpenAIResponsesModel
 from openai import AsyncOpenAI
@@ -41,7 +46,6 @@ from cerebro.agent.openai_runner import (
     OpenAIAgentsRunner,
     RouteCertainty,
     RunState,
-    ToolBudgetExceeded,
     build_agent_runner,
     build_input_items,
     normalize_azure_base_url,
@@ -97,7 +101,7 @@ async def test_eval_runner_never_initializes_shared_memory(monkeypatch: pytest.M
         shared_memory_enabled=False,
     )
     try:
-        assert runner._memory_tools(RunState(max_tool_calls=20)) == []
+        assert runner._memory_tools(RunState()) == []
     finally:
         await runner.close()
 
@@ -158,8 +162,8 @@ async def test_specialist_tool_grants_are_partitioned() -> None:
         client=AsyncOpenAI(api_key="test", base_url="https://example.test/v1/"),
     )
     try:
-        generic = {tool.name for tool in runner._generic_tools(RunState(max_tool_calls=20))}
-        payment = {tool.name for tool in runner._payment_tools(RunState(max_tool_calls=20))}
+        generic = {tool.name for tool in runner._generic_tools(RunState())}
+        payment = {tool.name for tool in runner._payment_tools(RunState())}
     finally:
         await runner.close()
 
@@ -167,6 +171,9 @@ async def test_specialist_tool_grants_are_partitioned() -> None:
         "read_finops_knowledge",
         "describe_database_tables",
         "run_readonly_sql",
+        "search_database_schema",
+        "inspect_database_relationships",
+        "recall_shared_memory",
     }
     assert payment == generic | {
         "search_payment_candidates",
@@ -250,8 +257,8 @@ async def test_empty_backend_is_explicitly_unavailable() -> None:
     assert result.candidates == []
 
 
-async def test_tool_budget_and_candidate_ledger() -> None:
-    state = RunState(max_tool_calls=1)
+async def test_unbudgeted_tools_and_candidate_ledger() -> None:
+    state = RunState()
 
     async def lookup(request: PaymentCandidateQuery) -> ToolObservation:
         del request
@@ -291,11 +298,16 @@ async def test_tool_budget_and_candidate_ledger() -> None:
         "truncated": None,
         "limitation_count": 0,
         "evidence_kinds": {"customer_name": 1},
+        "source_reference_count": 0,
+        "memory_ids": [],
+        "memory_version": None,
+        "source_references": [],
     }
-    with pytest.raises(ToolBudgetExceeded):
+    for _ in range(25):
         await state.invoke(
             "search_payment_candidates", PaymentCandidateQuery(transferor_name="otra"), lookup
         )
+    assert len(state.calls) == 26
 
 
 async def test_model_candidates_require_tool_support_and_url_is_application_owned() -> None:
@@ -324,8 +336,8 @@ async def test_model_candidates_require_tool_support_and_url_is_application_owne
         ),
     )
     try:
-        unsupported = runner._map_output(output, RunState(max_tool_calls=1))
-        supported_state = RunState(max_tool_calls=1, candidate_order_ids={ORDER_ID})
+        unsupported = runner._map_output(output, RunState())
+        supported_state = RunState(candidate_order_ids={ORDER_ID})
         verified = InvestigationCandidate(
             customer_name="María Solar",
             order_id=ORDER_UUID,
@@ -369,7 +381,7 @@ async def test_verified_identity_without_eligible_receivable_can_match_at_medium
         evidence=[signal],
         verified=True,
     )
-    state = RunState(max_tool_calls=1)
+    state = RunState()
     state.candidates[(ORDER_ID, None)] = candidate
     state.verified_candidates[(ORDER_ID, None)] = candidate
     state.evidence[signal.evidence_id] = signal
@@ -456,7 +468,7 @@ async def test_application_owns_confidence_and_abstention(
         evidence=signals,
         verified=True,
     )
-    state = RunState(max_tool_calls=1)
+    state = RunState()
     state.candidates[(ORDER_ID, RECEIVABLE_ID)] = candidate
     state.verified_candidates[(ORDER_ID, RECEIVABLE_ID)] = candidate
     state.evidence = {signal.evidence_id: signal for signal in signals}
@@ -488,13 +500,11 @@ async def test_no_customer_requires_a_conclusive_available_search() -> None:
     )
     output = ModelIdentification(outcome=IdentificationOutcome.NO_CUSTOMER_FOUND)
     amount_only = RunState(
-        max_tool_calls=1,
         candidate_search_succeeded=True,
         candidate_search_count=0,
         candidate_search_conclusive=False,
     )
     identity_search = RunState(
-        max_tool_calls=1,
         candidate_search_succeeded=True,
         candidate_search_count=0,
         candidate_search_conclusive=True,
@@ -510,7 +520,7 @@ async def test_no_customer_requires_a_conclusive_available_search() -> None:
 
 
 async def test_no_customer_cannot_hide_a_candidate_from_an_earlier_search() -> None:
-    state = RunState(max_tool_calls=2)
+    state = RunState()
 
     async def search_with_candidate(request: PaymentCandidateQuery) -> ToolObservation:
         del request
@@ -543,7 +553,7 @@ async def test_no_customer_cannot_hide_a_candidate_from_an_earlier_search() -> N
     )
 
     assert state.candidate_search_count == 1
-    assert state.candidate_search_conclusive is True
+    assert state.candidate_search_conclusive is False
 
 
 async def test_only_verified_competitors_can_force_ambiguity() -> None:
@@ -584,7 +594,7 @@ async def test_only_verified_competitors_can_force_ambiguity() -> None:
         evidence=[other_signal],
         verified=False,
     )
-    state = RunState(max_tool_calls=1)
+    state = RunState()
     state.candidates[(ORDER_ID, RECEIVABLE_ID)] = chosen
     state.candidates[(str(other_order), str(other_receivable))] = unverified
     state.verified_candidates[(ORDER_ID, RECEIVABLE_ID)] = chosen
@@ -631,7 +641,7 @@ def test_evidence_deduplication_keeps_equal_signals_for_distinct_candidates() ->
 
 
 async def test_only_verification_tool_authorizes_a_recommendation() -> None:
-    state = RunState(max_tool_calls=2)
+    state = RunState()
 
     async def verify(request: VerifyCandidateQuery) -> ToolObservation:
         return ToolObservation(
@@ -658,7 +668,7 @@ async def test_only_verification_tool_authorizes_a_recommendation() -> None:
 
 
 async def test_failed_tool_becomes_unavailable_observation_and_safe_audit() -> None:
-    state = RunState(max_tool_calls=1)
+    state = RunState()
 
     async def fail(request: PaymentCandidateQuery) -> ToolObservation:
         del request
@@ -680,9 +690,8 @@ async def test_failed_tool_becomes_unavailable_observation_and_safe_audit() -> N
 @pytest.mark.parametrize(
     ("exception", "reason"),
     [
-        (TimeoutError(), CompletionReason.TIMEOUT),
+        (ModelTimeoutError(180), CompletionReason.TIMEOUT),
         (MaxTurnsExceeded("limit"), CompletionReason.TURN_LIMIT),
-        (ToolBudgetExceeded("limit"), CompletionReason.TOOL_LIMIT),
         (ModelRefusalError("refused"), CompletionReason.REFUSAL),
         (ModelBehaviorError("bad"), CompletionReason.INVALID_OUTPUT),
     ],
@@ -733,7 +742,7 @@ async def test_safe_sdk_outcomes_return_unknown(
     assert isinstance(result, AgentRunResult)
     assert result.identification.confidence is Confidence.UNKNOWN
     assert result.completion_reason is reason
-    assert result.prompt_version == "payment-identification-v4"
+    assert result.prompt_version == "payment-identification-v5"
 
 
 async def test_success_records_usage_and_disables_sensitive_tracing(
@@ -798,7 +807,7 @@ async def test_success_records_usage_and_disables_sensitive_tracing(
         run_config = cast(RunConfig, invocation["run_config"])
         assert run_config.tracing_disabled is True
         assert run_config.trace_include_sensitive_data is False
-    assert [item["max_turns"] for item in captured] == [1, 8]
+    assert [item["max_turns"] for item in captured] == [1, 14]
     assert result.usage.model == "gpt-5-6-sol"
     assert result.usage.input_tokens == 240
     assert result.usage.output_tokens == 60
@@ -882,7 +891,7 @@ async def test_general_route_uses_only_generic_tools(
         await runner.close()
 
     assert isinstance(result, GeneralAgentRunResult)
-    assert result.prompt_version == "cerebro-general-v1"
+    assert result.prompt_version == "cerebro-general-v2"
     assert result.knowledge_version == "finops-read-scope-v5"
     assert result.usage.input_tokens == 30
     specialist = cast(Any, agents[1])
@@ -890,12 +899,15 @@ async def test_general_route_uses_only_generic_tools(
         "read_finops_knowledge",
         "describe_database_tables",
         "run_readonly_sql",
+        "search_database_schema",
+        "inspect_database_relationships",
+        "recall_shared_memory",
     }
     router = cast(Any, agents[0])
     assert router.tools == []
 
 
-async def test_uncertain_general_route_defaults_to_payment(
+async def test_uncertain_general_route_asks_without_investigation(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     agent_names: list[str] = []
@@ -934,11 +946,13 @@ async def test_uncertain_general_route_defaults_to_payment(
     finally:
         await runner.close()
 
-    assert isinstance(result, AgentRunResult)
-    assert agent_names == ["Cerebro Router", "Cerebro Payment Investigator"]
+    assert isinstance(result, GeneralAgentRunResult)
+    assert agent_names == ["Cerebro Router"]
+    assert result.response.answer.endswith("?")
+    assert result.tool_calls == ()
 
 
-async def test_adversarial_general_classification_defaults_to_payment(
+async def test_adversarial_marker_does_not_override_general_intent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     agent_names: list[str] = []
@@ -952,7 +966,7 @@ async def test_adversarial_general_classification_defaults_to_payment(
         @staticmethod
         def final_output_as(output_type: type[object], **kwargs: object) -> object:
             del output_type, kwargs
-            return ModelIdentification(outcome=IdentificationOutcome.AMBIGUOUS)
+            return GeneralAnswer(answer="Puedo explicar cómo se clasifican los pagos.")
 
     async def succeed(*args: object, **kwargs: object) -> object:
         del kwargs
@@ -980,8 +994,8 @@ async def test_adversarial_general_classification_defaults_to_payment(
     finally:
         await runner.close()
 
-    assert isinstance(result, AgentRunResult)
-    assert agent_names == ["Cerebro Router", "Cerebro Payment Investigator"]
+    assert isinstance(result, GeneralAgentRunResult)
+    assert agent_names == ["Cerebro Router", "Cerebro"]
     assert result.steps[0].status == "potentially_adversarial"
 
 

@@ -17,7 +17,7 @@ def test_routing_and_format_errors_cannot_hide_in_aggregate_score() -> None:
 
 def test_synthetic_eval_corpus_is_versioned_and_representative() -> None:
     corpus = load_corpus()
-    assert corpus.version == "slice5-v1"
+    assert corpus.version == "adaptive-v1"
     assert len(corpus.cases) == 20
     assert {case.id for case in corpus.cases} >= {
         "exact_address_text",

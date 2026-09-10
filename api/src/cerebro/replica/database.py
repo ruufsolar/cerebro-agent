@@ -3,6 +3,7 @@ import json
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from time import monotonic
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID
@@ -10,6 +11,7 @@ from uuid import UUID
 import asyncpg
 
 from cerebro.config import AppConfig
+from cerebro.replica.catalog import LiveCatalog, load_catalog
 from cerebro.replica.scope import KnowledgeBundle
 from cerebro.replica.sql_policy import ValidatedSql
 
@@ -52,6 +54,15 @@ class ReplicaDatabase:
         self.config = config
         self.knowledge = knowledge
         self.pool: asyncpg.Pool | None = None
+        self._catalog: LiveCatalog | None = None
+        self._catalog_at = 0.0
+
+    async def catalog(self, *, refresh: bool = False) -> LiveCatalog:
+        if refresh or self._catalog is None or monotonic() - self._catalog_at > 60:
+            async with self._require_pool().acquire() as connection:
+                self._catalog = await load_catalog(connection)
+                self._catalog_at = monotonic()
+        return self._catalog
 
     def _validate_dsn(self) -> None:
         if not self.config.read_replica_url:
@@ -102,6 +113,7 @@ class ReplicaDatabase:
             raise
 
     async def close(self) -> None:
+        self._catalog = None
         pool, self.pool = self.pool, None
         if pool is not None:
             await pool.close()
@@ -139,75 +151,23 @@ class ReplicaDatabase:
                 and self.config.allow_non_replica_readonly_db
             ):
                 raise ReplicaConfigurationError("database is not a physical read replica")
-            for relation in sorted(self.knowledge.scope.relation_names):
-                writable = await connection.fetchval(
-                    """
-                    SELECT has_table_privilege(
-                               current_user,
-                               to_regclass(format('%I.%I', 'public', $1::text)),
-                               'INSERT'
-                           )
-                        OR has_table_privilege(
-                               current_user,
-                               to_regclass(format('%I.%I', 'public', $1::text)),
-                               'UPDATE'
-                           )
-                        OR has_table_privilege(
-                               current_user,
-                               to_regclass(format('%I.%I', 'public', $1::text)),
-                               'DELETE'
-                           )
-                        OR has_table_privilege(
-                               current_user,
-                               to_regclass(format('%I.%I', 'public', $1::text)),
-                               'TRUNCATE'
-                           )
-                    """,
-                    relation,
-                )
-                if writable:
-                    raise ReplicaConfigurationError(f"replica role can write relation {relation}")
+            catalog = await load_catalog(connection)
+            # Check the whole visible schema without one network round trip per relation.
+            if any(relation.writable for relation in catalog.relations.values()):
+                raise ReplicaConfigurationError("replica role has application write privileges")
 
     async def check_schema(self) -> SchemaDrift:
-        pool = self._require_pool()
-        async with pool.acquire() as connection:
-            rows = await connection.fetch(
-                """
-                SELECT table_name, column_name, data_type
-                FROM information_schema.columns
-                WHERE table_schema = 'public' AND table_name = ANY($1::text[])
-                """,
-                sorted(self.knowledge.scope.relation_names),
-            )
-        actual: dict[str, dict[str, str]] = {}
-        for row in rows:
-            actual.setdefault(row["table_name"], {})[row["column_name"]] = row["data_type"]
-        missing_relations: list[str] = []
-        missing_columns: list[str] = []
-        incompatible: list[str] = []
-        aliases = {
-            "varchar": {"character varying", "text"},
-            "timestamp": {"timestamp without time zone", "timestamp with time zone"},
-            "numeric": {"numeric", "decimal"},
-            "enum": {"USER-DEFINED", "text", "character varying"},
-        }
-        for name, schema in self.knowledge.catalog.relations.items():
-            if name not in actual:
-                missing_relations.append(name)
-                continue
-            for column, expected in schema.columns.items():
-                observed = actual[name].get(column)
-                alias_mismatch = expected in aliases and observed not in aliases[expected]
-                direct_mismatch = expected not in aliases and observed != expected
-                if observed is None:
-                    missing_columns.append(f"{name}.{column}")
-                elif alias_mismatch or direct_mismatch:
-                    incompatible.append(f"{name}.{column}:{observed}!={expected}")
-        return SchemaDrift(
-            tuple(sorted(missing_relations)),
-            tuple(sorted(missing_columns)),
-            tuple(sorted(incompatible)),
-        )
+        # Only the canonical CRM identity is mandatory. Curated helper dependencies
+        # may drift without disabling unrelated exploratory/general reads.
+        catalog = await self.catalog(refresh=True)
+        order = catalog.relations.get(("public", "order"))
+        if order is None:
+            return SchemaDrift(missing_relations=("public.order",))
+        if "id" not in order.columns:
+            return SchemaDrift(missing_columns=("public.order.id",))
+        if order.columns["id"] != "uuid":
+            return SchemaDrift(incompatible_types=("public.order.id",))
+        return SchemaDrift()
 
     async def run_validated(self, sql: ValidatedSql) -> QueryResult:
         return await self.fetch_bounded(sql.normalized_sql)
@@ -249,6 +209,8 @@ class ReplicaDatabase:
             self.knowledge.scope.query_limits.max_output_bytes,
         )
         for record in records:
+            if any(isinstance(value, str) and len(value) > 2_000 for value in record.values()):
+                truncated = True
             row = {key: _safe_json_value(value) for key, value in record.items()}
             candidate = [*safe_rows, row]
             if len(json.dumps(candidate, ensure_ascii=False, default=str).encode()) > byte_limit:

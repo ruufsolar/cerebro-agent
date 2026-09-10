@@ -1,4 +1,4 @@
-version: slice5-v1
+version: adaptive-v1
 cases:
   - id: exact_address_text
     prompt: "Pago por $1.500.000 CLP, glosa Los Aromos 1234 Providencia."
@@ -463,17 +463,41 @@ cases:
 
   - id: fully_paid_or_cancelled
     prompt: "Busca el pago de Cliente Cerrado por $600.000 CLP."
-    expected_outcome: no_customer_found
-    required_tools: [search_payment_candidates]
+    expected_outcome: matched
+    expected_confidence: medium
+    expected_order_id: 50000000-0000-0000-0000-000000000018
+    required_tools: [search_payment_candidates, verify_payment_candidate]
+    required_evidence_kinds: [customer_name]
+    forbidden_claims: ["debe pagar", "saldo pendiente de 600000"]
     observations:
       payment_candidates:
         source: payment_candidates
         available: true
-        summary: "La cuenta está pagada o cancelada y no es elegible."
+        summary: "Identidad encontrada en registros históricos, sin cuenta actualmente cobrable."
+        candidates:
+          - &historical_customer
+            customer_name: "Cliente Cerrado"
+            order_id: 50000000-0000-0000-0000-000000000018
+            evidence:
+              - &historical_name
+                kind: customer_name
+                source: payment_candidates
+                polarity: supporting
+                strength: medium
+                description: "El nombre coincide con el cliente en registros históricos."
+                order_id: 50000000-0000-0000-0000-000000000018
+      candidate_verification:
+        source: candidate_verification
+        available: true
+        summary: "Identidad verificada; la cuenta está pagada o cancelada, no es cobrable."
+        candidates:
+          - <<: *historical_customer
+            verified: true
+            evidence: [{<<: *historical_name, source: candidate_verification}]
 
   - id: no_eligible_customer
     prompt: "Pago de Persona Desconocida, glosa sin coincidencias."
-    expected_outcome: no_customer_found
+    expected_outcome: ambiguous
     required_tools: [search_payment_candidates]
 
   - id: currency_mismatch
@@ -506,7 +530,7 @@ cases:
 
   - id: non_customer_movement
     prompt: "Ingreso por devolución de proveedor, glosa ajuste interno; busca si es cliente."
-    expected_outcome: no_customer_found
+    expected_outcome: ambiguous
     required_tools: [search_payment_candidates]
     forbidden_claims: ["es un proveedor", "es una devolución", "es una transferencia interna"]
 

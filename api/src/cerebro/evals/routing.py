@@ -14,6 +14,7 @@ class RoutingCase(BaseModel):
     expected: RequestKind
     prior_thread: list[str] = Field(default_factory=list)
     has_triggering_image: bool = False
+    clarify: bool = False
 
 
 class RoutingCorpus(BaseModel):
@@ -26,7 +27,11 @@ def load_routing_corpus(path: Path | None = None) -> RoutingCorpus:
     return RoutingCorpus.model_validate(yaml.safe_load(source.read_text(encoding="utf-8")))
 
 
-def grade_routes(corpus: RoutingCorpus, actual: dict[str, RequestKind]) -> dict[str, object]:
+def grade_routes(
+    corpus: RoutingCorpus,
+    actual: dict[str, RequestKind],
+    clarifications: dict[str, bool] | None = None,
+) -> dict[str, object]:
     missing = [case.id for case in corpus.cases if case.id not in actual]
     payment_to_general = [
         case.id
@@ -35,11 +40,20 @@ def grade_routes(corpus: RoutingCorpus, actual: dict[str, RequestKind]) -> dict[
         and actual.get(case.id) is RequestKind.GENERAL
     ]
     mismatches = [case.id for case in corpus.cases if actual.get(case.id) != case.expected]
+    clarification_mismatches = [
+        case.id
+        for case in corpus.cases
+        if clarifications is not None and clarifications.get(case.id) != case.clarify
+    ]
     return {
         "version": corpus.version,
         "case_count": len(corpus.cases),
-        "passed": not missing and not mismatches and not payment_to_general,
+        "passed": not missing
+        and not mismatches
+        and not payment_to_general
+        and not clarification_mismatches,
         "missing": missing,
         "mismatches": mismatches,
         "payment_to_general": payment_to_general,
+        "clarification_mismatches": clarification_mismatches,
     }

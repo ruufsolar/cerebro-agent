@@ -1,4 +1,6 @@
+import json
 import re
+from dataclasses import asdict
 from datetime import UTC, datetime, time, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +14,8 @@ from cerebro.agent.data_tools import (
     PaymentCandidateQuery,
     ReadonlySqlQuery,
     SchemaQuery,
+    SchemaSearchQuery,
+    SourceRecord,
     ToolAuditMetadata,
     ToolObservation,
     VambeQuery,
@@ -24,6 +28,7 @@ from cerebro.agent.models import (
     EvidenceSource,
     EvidenceStrength,
 )
+from cerebro.replica.catalog import quote_identifier, relation_key
 from cerebro.replica.database import QueryResult, ReplicaDatabase
 from cerebro.replica.scope import KnowledgeBundle
 from cerebro.replica.sql_policy import SqlPolicyError, validate_readonly_sql
@@ -640,7 +645,31 @@ def _identity_candidate(
                 )
             )
     if requested_address:
-        if _strong_name_match(requested_address, customer_name):
+        address = _plain(str(row.get("full_address") or ""))
+        glosa = _plain(requested_address)
+        if address and f" {address} " in f" {glosa} ":
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.EXACT_ADDRESS,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.STRONG,
+                    description="La glosa coincide con la dirección completa de instalación.",
+                )
+            )
+        elif address and _partial_address_match(glosa, address):
+            evidence.append(
+                _signal(
+                    row,
+                    verified=verified,
+                    kind=EvidenceKind.PARTIAL_ADDRESS,
+                    polarity=EvidencePolarity.SUPPORTING,
+                    strength=EvidenceStrength.MEDIUM,
+                    description="La glosa coincide parcialmente con la dirección de instalación.",
+                )
+            )
+        elif _strong_name_match(requested_address, customer_name):
             evidence.append(
                 _signal(
                     row,
@@ -759,9 +788,11 @@ class ReplicaInvestigationData:
                 encoding="utf-8"
             )
         elif request.topic == "data_scope":
-            summary = f"Scope v{self.knowledge.scope.version}; relaciones permitidas: " + ", ".join(
-                sorted(self.knowledge.scope.relation_names)
+            summary = (
+                f"Guía v{self.knowledge.scope.version}; puntos de partida sugeridos: "
+                + ", ".join(sorted(self.knowledge.scope.relation_names))
             )
+            summary += ". Descubre otras relaciones legibles con search_database_schema."
         else:
             summary = "; ".join(
                 item["detail"] for item in self.knowledge.scope.explicitly_unavailable
@@ -769,28 +800,100 @@ class ReplicaInvestigationData:
         return ToolObservation(source="finops_knowledge", available=True, summary=summary)
 
     async def describe_database_tables(self, request: SchemaQuery) -> ToolObservation:
-        names = [name.lower() for name in request.names]
-        unknown = sorted(set(names) - self.knowledge.scope.relation_names)
-        if unknown:
-            return ToolObservation(
-                source="database_schema",
-                available=False,
-                summary="Una o más relaciones no están permitidas.",
-                limitations=[f"No permitidas: {', '.join(unknown)}"],
+        catalog = await self.database.catalog()
+        rows: list[dict[str, object]] = []
+        missing = False
+        for name in request.names:
+            relation = catalog.relations.get(relation_key(name))
+            if relation is None:
+                missing = True
+                continue
+            guidance = self.knowledge.catalog.relations.get(relation.name)
+            rows.append(
+                {
+                    "name": relation.qualified,
+                    "kind": relation.kind,
+                    "description": relation.description,
+                    "columns": relation.columns,
+                    "primary_key": list(relation.primary_key),
+                    "guidance": guidance.gotchas
+                    if guidance and relation.schema == "public"
+                    else [],
+                }
             )
-        rows = [
-            {
-                "name": name,
-                **self.knowledge.catalog.relations[name].model_dump(mode="json"),
-            }
-            for name in names
-        ]
+        return self._metadata("database_schema", rows, missing=missing)
+
+    def _metadata(
+        self,
+        source: str,
+        rows: list[dict[str, object]],
+        *,
+        missing: bool = False,
+        truncated: bool = False,
+    ) -> ToolObservation:
+        kept: list[dict[str, object]] = []
+        budget = min(
+            self.database.config.sql_max_output_bytes,
+            self.knowledge.scope.query_limits.max_output_bytes,
+        )
+        for row in rows:
+            size = len(json.dumps(row, ensure_ascii=False).encode())
+            if size > budget:
+                truncated = True
+                break
+            budget -= size
+            kept.append(row)
         return ToolObservation(
-            source="database_schema",
-            available=True,
-            summary=f"Descripción de {len(rows)} relaciones permitidas.",
-            rows=rows,
-            audit=ToolAuditMetadata(row_count=len(rows), truncated=False),
+            source=source,
+            available=not missing,
+            summary="Metadatos actuales de relaciones legibles por el rol de réplica.",
+            rows=kept,
+            limitations=(["Hay relaciones no disponibles."] if missing else [])
+            + (
+                ["Metadatos truncados; reduce la consulta o pide otra página."] if truncated else []
+            ),
+            audit=ToolAuditMetadata(row_count=len(kept), truncated=truncated),
+        )
+
+    async def search_database_schema(self, request: SchemaSearchQuery) -> ToolObservation:
+        catalog = await self.database.catalog()
+        tokens = _plain(request.query).split()
+        matches = [
+            relation
+            for relation in catalog.relations.values()
+            if all(
+                token
+                in _plain(" ".join([relation.qualified, relation.description, *relation.columns]))
+                for token in tokens
+            )
+        ]
+        matches.sort(key=lambda relation: relation.qualified)
+        page = matches[request.offset : request.offset + request.limit]
+        return self._metadata(
+            "database_schema",
+            [
+                {
+                    "name": relation.qualified,
+                    "kind": relation.kind,
+                    "description": relation.description,
+                    "column_count": len(relation.columns),
+                }
+                for relation in page
+            ],
+            truncated=request.offset + request.limit < len(matches),
+        )
+
+    async def inspect_database_relationships(self, request: SchemaQuery) -> ToolObservation:
+        catalog = await self.database.catalog()
+        keys = {relation_key(name) for name in request.names}
+        return self._metadata(
+            "database_relationships",
+            [
+                asdict(fk)
+                for fk in catalog.foreign_keys.values()
+                if fk.source in keys or fk.target in keys
+            ],
+            missing=not keys.issubset(catalog.relations),
         )
 
     async def _search_customer_identities(self, request: PaymentCandidateQuery) -> QueryResult:
@@ -801,6 +904,17 @@ class ReplicaInvestigationData:
             return f"${len(params)}"
 
         matches: list[tuple[str, str]] = []
+        if request.glosa_or_address:
+            address_parameter = parameter(_glosa_name_tokens(request.glosa_or_address))
+            matches.append(
+                (
+                    "historical_address_match",
+                    "EXISTS (SELECT 1 FROM UNNEST("
+                    f"{address_parameter}::text[]) AS token(value) WHERE "
+                    "immutable_unaccent(LOWER(full_address)) LIKE '%' || "
+                    "immutable_unaccent(LOWER(token.value)) || '%')",
+                )
+            )
         for alias, value in (
             ("transferor_identity_match", request.transferor_name),
             ("glosa_identity_match", request.glosa_or_address),
@@ -870,7 +984,7 @@ class ReplicaInvestigationData:
         FROM scored
         WHERE {" OR ".join(aliases)}
         ORDER BY {ordering}, order_number DESC
-        LIMIT 20
+        LIMIT 21
         """
         return await self.database.fetch_bounded(query, *params, max_rows=20)
 
@@ -996,7 +1110,7 @@ class ReplicaInvestigationData:
           SELECT * FROM scored
           WHERE {" OR ".join(aliases)}
           ORDER BY {ordering}, order_number DESC
-          LIMIT 20
+          LIMIT 21
         )
         SELECT matched.customer_name, matched.customer_rut, matched.customer_email,
                matched.customer_phone, matched.signee_names, matched.signee_ruts,
@@ -1022,15 +1136,16 @@ class ReplicaInvestigationData:
                 request.phone,
             )
         )
-        if has_identity_input and not candidates:
+        if has_identity_input:
             identity_result = await self._search_customer_identities(request)
             identity_candidates = [
                 _identity_candidate(row, request, verified=False) for row in identity_result.rows
             ]
+            eligible_orders = {candidate.order_id for candidate in candidates}
             candidates.extend(
                 candidate
                 for candidate in identity_candidates
-                if _is_meaningful_candidate(candidate)
+                if _is_meaningful_candidate(candidate) and candidate.order_id not in eligible_orders
             )
         return ToolObservation(
             source="payment_candidates",
@@ -1044,6 +1159,11 @@ class ReplicaInvestigationData:
             audit=ToolAuditMetadata(
                 row_count=result.row_count + identity_result.row_count,
                 truncated=result.truncated or identity_result.truncated,
+                identity_search_complete=bool(
+                    (request.transferor_rut or request.email or request.phone)
+                    and result.row_count == 0
+                    and identity_result.row_count == 0
+                ),
             ),
         )
 
@@ -1099,6 +1219,97 @@ class ReplicaInvestigationData:
                 truncated=result.truncated or identity_result.truncated,
             ),
         )
+
+    async def verify_payment_sources(
+        self, request: VerifyCandidateQuery, sources: list[SourceRecord]
+    ) -> ToolObservation:
+        observation = await self.verify_payment_candidate(request)
+        if not observation.candidates:
+            return observation
+        catalog = await self.database.catalog()
+        linked = {link.reference: link for link in request.source_links}
+        for source in sources:
+            link = linked.get(source.reference)
+            if link is None:
+                continue
+            try:
+                query, params, relation = catalog.source_query(
+                    source.record, link.relationship_path
+                )
+            except ValueError:
+                observation.limitations.append("La relación propuesta no pudo verificarse.")
+                continue
+            orders = await self.database.fetch_bounded(query, *params, max_rows=2)
+            if (
+                orders.truncated
+                or len(orders.rows) != 1
+                or (str(orders.rows[0]["order_id"]) != str(request.order_id))
+            ):
+                observation.limitations.append("La fuente no vincula inequívocamente esta orden.")
+                continue
+            # Re-read actual identity fields, never aliases/literals/aggregates from arbitrary SQL.
+            fields = [
+                name
+                for name in (
+                    "name",
+                    "fullName",
+                    "firstName",
+                    "middleName",
+                    "lastName",
+                    "secondLastName",
+                )
+                if name in relation.columns
+            ]
+            if not fields:
+                observation.limitations.append(
+                    "Fuente vinculada; sin señal de identidad validable."
+                )
+                continue
+            _, predicate, params = catalog.record_predicate(source.record)
+            projection = ", ".join(f"t0.{quote_identifier(name)}" for name in fields)
+            values = await self.database.fetch_bounded(
+                f"SELECT {projection} FROM {relation.sql} t0 WHERE {predicate}",
+                *params,
+                max_rows=1,
+            )
+            if values.truncated or not values.rows:
+                continue
+            row = values.rows[0]
+            actual_name = " ".join(str(row.get(name) or "") for name in fields)
+            if not any(
+                _strong_name_match(value, actual_name)
+                for value in (request.transferor_name, request.address)
+                if value
+            ):
+                continue
+            kind = EvidenceKind.NAME_FRAGMENT
+            strength = EvidenceStrength.WEAK
+            description = (
+                "Una referencia vinculada a la orden coincide con el nombre; "
+                "por sí sola no identifica al pagador."
+            )
+            # Even a personal_details FK can describe an employee or unrelated signatory.
+            # Only canonical customer/signee verification above can establish medium identity.
+            for candidate in observation.candidates:
+                candidate.evidence.append(
+                    EvidenceSignal(
+                        kind=kind,
+                        strength=strength,
+                        source=EvidenceSource.CANDIDATE_VERIFICATION,
+                        polarity=EvidencePolarity.SUPPORTING,
+                        description=description,
+                        order_id=str(candidate.order_id),
+                        account_receivable_id=(
+                            str(candidate.account_receivable_id)
+                            if candidate.account_receivable_id
+                            else None
+                        ),
+                        source_reference=source.reference,
+                    )
+                )
+            observation.audit.source_references.append(source.reference)
+            observation.audit.referenced_relations.append(relation.qualified)
+        return observation
 
     async def search_vambe_messages(self, request: VambeQuery) -> ToolObservation:
         limits = self.knowledge.scope.query_limits
@@ -1185,8 +1396,11 @@ class ReplicaInvestigationData:
         )
 
     async def run_readonly_sql(self, request: ReadonlySqlQuery) -> ToolObservation:
+        catalog = await self.database.catalog()
         try:
-            validated = validate_readonly_sql(request.query, self.knowledge.scope)
+            validated = validate_readonly_sql(
+                request.query, self.knowledge.scope, readable_relations=set(catalog.relations)
+            )
         except SqlPolicyError as exc:
             return ToolObservation(
                 source="readonly_sql",
@@ -1194,12 +1408,30 @@ class ReplicaInvestigationData:
                 summary="La consulta fue rechazada por la política de lectura.",
                 limitations=[str(exc)],
             )
-        result: QueryResult = await self.database.run_validated(validated)
+        result = await self.database.fetch_bounded(
+            f"SELECT * FROM ({validated.normalized_sql}) AS page OFFSET $1", request.offset
+        )
+        sources: list[SourceRecord] = []
+        for record in request.source_records:
+            try:
+                relation, predicate, params = catalog.record_predicate(record)
+            except ValueError:
+                continue
+            if relation.key not in {relation_key(name) for name in validated.relations}:
+                continue
+            found = await self.database.fetch_bounded(
+                f"SELECT 1 AS present FROM {relation.sql} t0 WHERE {predicate}",
+                *params,
+                max_rows=1,
+            )
+            if found.rows:
+                sources.append(SourceRecord(record=record))
         return ToolObservation(
             source="readonly_sql",
             available=True,
             summary=f"Consulta de solo lectura: {result.row_count} filas.",
             rows=list(result.rows),
+            source_records=sources,
             limitations=["Resultado truncado al límite seguro."] if result.truncated else [],
             audit=ToolAuditMetadata(
                 query_fingerprint=validated.fingerprint,

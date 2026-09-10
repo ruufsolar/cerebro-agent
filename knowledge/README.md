@@ -4,7 +4,8 @@ This directory contains versioned facts/policies made available to the agent. It
 from the engineering wiki: wiki text explains the system; knowledge text influences live
 investigation.
 
-- `data-scope.yaml` declares the initial replica relations, business role, and search scope.
+- `data-scope.yaml` provides curated starting relations, business rules and query resource limits;
+  live replica grants and metadata define readable application relations, not this curated subset.
 - `finops-general-policy.md` defines the conversational read-only operating boundary.
 - `payment-identification-policy.md` is the normalized identification policy.
 - `monolith/SYNC.md` records which monolith facts were checked and known drift.

@@ -37,7 +37,7 @@ def test_nested_cte_shadowing_is_scoped_not_globally_rejected() -> None:
 def test_knowledge_scope_and_catalog_are_versioned_and_complete() -> None:
     knowledge = load_knowledge(KNOWLEDGE_DIR)
 
-    assert knowledge.scope.version == 5
+    assert knowledge.scope.version == 6
     assert knowledge.catalog.version == 4
     assert knowledge.scope.relation_names == set(knowledge.catalog.relations)
     assert {
