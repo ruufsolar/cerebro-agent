@@ -2,17 +2,20 @@ from enum import StrEnum
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class GlobalMode(StrEnum):
-    """Highest level of autonomy allowed by the running process."""
+    """Whether this process accepts work and replies, not write authority."""
 
     OFF = "off"
-    SHADOW = "shadow"
-    REVIEW = "review"
-    APPLY = "apply"
+    ENABLED = "enabled"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "GlobalMode | None":
+        # Existing production secrets remain valid during the transition.
+        return cls.ENABLED if value == "review" else None
 
 
 class ReadinessProfile(StrEnum):
@@ -54,13 +57,10 @@ class AppConfig(BaseSettings):
     general_max_words: int = Field(default=180, ge=40, le=500)
 
     global_mode: GlobalMode = GlobalMode.OFF
-    payment_writes_enabled: bool = False
-    hold_writes_enabled: bool = False
 
     max_agent_turns: int = Field(default=8, ge=1, le=30)
     max_tool_calls: int = Field(default=20, ge=1, le=100)
     agent_timeout_seconds: int = Field(default=180, ge=10, le=900)
-    sql_statement_timeout_seconds: int = Field(default=15, ge=1, le=60)
     sql_max_rows: int = Field(default=200, ge=1, le=1_000)
     max_images: int = Field(default=4, ge=1, le=10)
     max_image_bytes: int = Field(default=8 * 1024 * 1024, ge=1_024)
@@ -74,6 +74,13 @@ class AppConfig(BaseSettings):
     worker_concurrency: int = Field(default=2, ge=1, le=8)
     runtime_heartbeat_seconds: int = Field(default=15, ge=5, le=60)
     runtime_stale_seconds: int = Field(default=45, ge=15, le=300)
+
+    @field_validator("global_mode", mode="before")
+    @classmethod
+    def validate_mode(cls, value: object) -> object:
+        if value in {"shadow", "apply"}:
+            raise ValueError("shadow/apply were retired; use off or enabled (review is an alias)")
+        return value
 
     crm_finops_base_url: str = "https://tutu.ruuf.cl/account-receivables/crm-finops"
     knowledge_dir: str = "../knowledge"
@@ -172,12 +179,7 @@ class AppConfig(BaseSettings):
 
     @property
     def pilot_configuration_ready(self) -> bool:
-        return bool(
-            self.live_agent_ready
-            and not self.payment_writes_enabled
-            and not self.hold_writes_enabled
-            and not self.external_tracing_enabled
-        )
+        return bool(self.live_agent_ready and not self.external_tracing_enabled)
 
 
 @lru_cache

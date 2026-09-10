@@ -19,7 +19,6 @@ def create_app() -> FastAPI:
             "service": "cerebro-agent",
             "version": __version__,
             "environment": config.environment,
-            "phase": "payment-identification-pilot",
         }
 
     @app.get("/ready", tags=["operations"])

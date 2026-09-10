@@ -14,14 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from cerebro.agent.models import (
     Confidence,
-    CustomerCandidate,
-    EvidenceKind,
-    EvidencePolarity,
-    IdentificationOutcome,
     PaymentIdentification,
     RequestKind,
     ToolAuditRecord,
 )
+from cerebro.agent.prompt import PROMPT_VERSION, TRANSCRIPT_LIMIT
 from cerebro.agent.runner import (
     AgentRunFailure,
     AgentRunInput,
@@ -46,6 +43,15 @@ from cerebro.jobs.enqueue import enqueue_slack_output
 from cerebro.observability import log_event
 from cerebro.slack.gateway import get_slack_gateway
 from cerebro.slack.images import ImageBatch, ingest_trigger_images
+from cerebro.slack.rendering import (
+    render_general_answer as render_general_answer,
+)
+from cerebro.slack.rendering import (
+    render_identification as render_identification,
+)
+from cerebro.slack.rendering import (
+    render_response as render_response,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,166 +79,6 @@ async def _persist_tool_calls(
             .on_conflict_do_nothing(index_elements=[ToolCall.agent_run_id, ToolCall.sequence])
         )
         await session.execute(statement)
-
-
-def render_identification(
-    run_result: AgentRunResult, image_ingestion: ImageIngestion | None = None
-) -> str:
-    result = run_result.identification
-    confidence = {
-        Confidence.HIGH: "alta",
-        Confidence.MEDIUM: "media",
-        Confidence.LOW: "baja",
-        Confidence.UNKNOWN: "no sé",
-    }[result.confidence]
-    if result.outcome is IdentificationOutcome.OUT_OF_SCOPE:
-        return f"*Resultado:* {_clip_words(result.investigation_summary, 25)}"
-
-    image_note = ""
-    if image_ingestion and image_ingestion.unprocessed:
-        image_note = (
-            f"{image_ingestion.unprocessed}/{image_ingestion.requested} capturas no procesadas"
-        )
-    unable = list(result.unable_to_verify)
-    if image_note and image_note not in unable:
-        unable.append(image_note)
-    pending = ", ".join(_clip_words(item, 5) for item in unable[:3])
-
-    if result.outcome is IdentificationOutcome.MATCHED and result.recommended_customer:
-        candidate = result.recommended_customer
-        lines = [
-            f"*Resultado:* coincidencia — confianza {confidence}.",
-            f"*Cliente:* {_customer_link(candidate)}",
-        ]
-        if result.account_receivable_summary:
-            lines.append(f"*Cuenta:* {_clip_words(result.account_receivable_summary, 16)}")
-        lines.append(f"*Por qué:* {_clip_words(result.investigation_summary, 34)}")
-        tail: list[str] = []
-        if pending:
-            tail.append(f"*No pude verificar:* {pending}")
-        if result.alternatives:
-            tail.append(f"*Alternativas:* {_render_alternatives(result)}")
-        if tail:
-            lines.append(" · ".join(tail))
-        return "\n".join(lines)
-
-    if result.outcome is IdentificationOutcome.NO_CUSTOMER_FOUND:
-        lines = [
-            "*Resultado:* no encontré un cliente.",
-            f"*Por qué:* {_clip_words(result.investigation_summary, 24)}",
-        ]
-        if pending:
-            lines.append(f"*No pude verificar:* {pending}")
-        return "\n".join(lines)
-
-    lines = [
-        "*Resultado:* no sé; FinOps debe revisar el pago.",
-        f"*Por qué:* {_clip_words(result.investigation_summary, 24)}",
-    ]
-    details: list[str] = []
-    if result.alternatives:
-        details.append(f"*Opciones:* {_render_alternatives(result)}")
-    if pending:
-        details.append(f"*Falta:* {pending}")
-    if details:
-        lines.append(" · ".join(details))
-    return "\n".join(lines)
-
-
-def render_general_answer(
-    run_result: GeneralAgentRunResult, image_ingestion: ImageIngestion | None = None
-) -> str:
-    image_note = None
-    if image_ingestion and image_ingestion.unprocessed:
-        image_note = (
-            f"No pude procesar {image_ingestion.unprocessed} de "
-            f"{image_ingestion.requested} capturas."
-        )
-    return _limit_complete_answer(
-        run_result.response.answer,
-        get_config().general_max_words,
-        required_suffix=image_note,
-    )
-
-
-def render_response(run_result: RunnerResult, image_ingestion: ImageIngestion | None = None) -> str:
-    if isinstance(run_result, GeneralAgentRunResult):
-        return render_general_answer(run_result, image_ingestion)
-    return render_identification(run_result, image_ingestion)
-
-
-def _clip_words(value: str, limit: int) -> str:
-    words = value.split()
-    if len(words) <= limit:
-        return value.strip()
-    return " ".join(words[:limit]).rstrip(".,;:")
-
-
-def _limit_complete_answer(value: str, limit: int, *, required_suffix: str | None = None) -> str:
-    answer = re.sub(r"(?:\.{3}|…)\s*$", ".", value.strip())
-    suffix_words = required_suffix.split() if required_suffix else []
-    available = max(limit - len(suffix_words), 1)
-    if len(answer.split()) <= available:
-        parts = [answer]
-    else:
-        units = [item.strip() for item in re.split(r"(?<=[.!?])\s+|\n+", answer) if item.strip()]
-        parts: list[str] = []
-        used = 0
-        for unit in units:
-            size = len(unit.split())
-            if used + size > available:
-                break
-            parts.append(unit)
-            used += size
-        if not parts:
-            parts = [
-                "Mi respuesta excedió el formato breve de Slack. "
-                "Pídeme que la divida y desplegaré el resto de mi intelecto."
-            ]
-    if required_suffix:
-        parts.append(required_suffix)
-    return "\n".join(parts)
-
-
-def _render_alternatives(result: PaymentIdentification) -> str:
-    labels = {
-        EvidenceKind.EXACT_ADDRESS: "dirección exacta",
-        EvidenceKind.PARTIAL_ADDRESS: "dirección parcial",
-        EvidenceKind.CUSTOMER_NAME: "nombre del cliente",
-        EvidenceKind.SIGNEE_NAME: "nombre de firmante",
-        EvidenceKind.NAME_FRAGMENT: "fragmento de nombre",
-        EvidenceKind.RUT: "RUT",
-        EvidenceKind.EMAIL: "correo",
-        EvidenceKind.PHONE: "teléfono",
-        EvidenceKind.BANK_NAME: "titular bancario",
-        EvidenceKind.BANK_ACCOUNT: "cuenta bancaria",
-        EvidenceKind.EXACT_OUTSTANDING: "saldo exacto",
-        EvidenceKind.PARTIAL_PAYMENT: "abono posible",
-        EvidenceKind.VAMBE_CONTEXT: "contexto de Vambe",
-    }
-    evidence = {item.evidence_id: item for item in result.evidence}
-
-    def compact_reason(candidate: CustomerCandidate) -> str:
-        reasons = list(
-            dict.fromkeys(
-                labels[signal.kind]
-                for evidence_id in candidate.evidence_ids
-                if (signal := evidence.get(evidence_id)) is not None
-                and signal.polarity is EvidencePolarity.SUPPORTING
-                and signal.kind in labels
-            )
-        )
-        return " + ".join(reasons[:2]) or "evidencia por verificar"
-
-    return "; ".join(
-        f"{_customer_link(candidate, max_name_words=5)} — {compact_reason(candidate)}"
-        for candidate in result.alternatives[:3]
-    )
-
-
-def _customer_link(candidate: CustomerCandidate, *, max_name_words: int = 8) -> str:
-    customer_name = _clip_words(candidate.customer_name, max_name_words)
-    return f"<{candidate.crm_url}|{customer_name}>"
 
 
 def _bounded_json(
@@ -302,7 +148,7 @@ def _attachment_summary(trigger: Message) -> tuple[int, int]:
 async def _cancel_if_stale(run_id: UUID) -> bool:
     async with open_session() as session:
         run = await session.get(AgentRun, run_id, with_for_update=True)
-        if run is None:
+        if run is None or run.status not in {RunStatus.QUEUED, RunStatus.RUNNING}:
             return True
         trigger = await session.get(Message, run.trigger_message_id)
         assert trigger is not None
@@ -315,7 +161,7 @@ async def _cancel_if_stale(run_id: UUID) -> bool:
             )
             .limit(1)
         )
-        if newer_message is None:
+        if newer_message is None and get_config().global_mode != GlobalMode.OFF:
             return False
         run.status = RunStatus.CANCELLED
         run.finished_at = datetime.now(UTC)
@@ -400,6 +246,11 @@ async def execute_run(run_id: UUID) -> None:
         run = await session.get(AgentRun, run_id, with_for_update=True)
         if run is None or run.status != RunStatus.QUEUED:
             return
+        if config.global_mode == GlobalMode.OFF:
+            run.status = RunStatus.CANCELLED
+            run.finished_at = datetime.now(UTC)
+            await session.commit()
+            return
         conversation = await session.get(Conversation, run.conversation_id)
         trigger = await session.get(Message, run.trigger_message_id)
         assert conversation is not None and trigger is not None
@@ -423,10 +274,12 @@ async def execute_run(run_id: UUID) -> None:
                 await session.scalars(
                     select(Message)
                     .where(Message.conversation_id == conversation.id)
-                    .order_by(Message.event_at, Message.created_at)
+                    .order_by(Message.event_at.desc(), Message.created_at.desc())
+                    .limit(TRANSCRIPT_LIMIT)
                 )
             ).all()
         )
+        stored_messages.reverse()
         transcript = tuple(
             TranscriptMessage(
                 direction=message.direction,
@@ -476,7 +329,7 @@ async def execute_run(run_id: UUID) -> None:
         run_status=RunStatus.RUNNING,
     )
 
-    posts_to_slack = config.global_mode in {GlobalMode.REVIEW, GlobalMode.APPLY}
+    posts_to_slack = config.global_mode == GlobalMode.ENABLED
     runner = get_agent_runner()
     if posts_to_slack:
         try:
@@ -541,7 +394,7 @@ async def execute_run(run_id: UUID) -> None:
                         ),
                         unable_to_verify=["cliente", "cuenta por cobrar", "evidencia del pago"],
                     ),
-                    prompt_version="payment-identification-slice5-v3",
+                    prompt_version=PROMPT_VERSION,
                 )
             result = _append_image_limitation(result, image_batch.ingestion)
         body = render_response(result, image_batch.ingestion)
@@ -553,6 +406,9 @@ async def execute_run(run_id: UUID) -> None:
         async with open_session() as session:
             run = await session.get(AgentRun, run_id, with_for_update=True)
             assert run is not None
+            if run.status != RunStatus.RUNNING:
+                # Recovery may have already finalized a worker that lost its heartbeat.
+                return
             conversation = await session.get(Conversation, run.conversation_id)
             assert conversation is not None
             run.status = RunStatus.SUCCEEDED
@@ -639,7 +495,17 @@ async def execute_run(run_id: UUID) -> None:
             image_count=image_batch.ingestion.downloaded,
         )
         if output_id:
-            await enqueue_slack_output(output_id)
+            try:
+                await enqueue_slack_output(output_id)
+            except Exception as exc:
+                # The committed outbox is authoritative; periodic recovery submits it.
+                log_event(
+                    logger,
+                    "slack_output_enqueue_deferred",
+                    level=logging.WARNING,
+                    output_id=output_id,
+                    error_type=type(exc).__name__,
+                )
     except Exception as exc:
         log_event(
             logger,
@@ -653,7 +519,7 @@ async def execute_run(run_id: UUID) -> None:
         output_id = None
         async with open_session() as session:
             run = await session.get(AgentRun, run_id, with_for_update=True)
-            if run:
+            if run and run.status == RunStatus.RUNNING:
                 if isinstance(exc, AgentRunFailure):
                     run.prompt_version = exc.prompt_version
                     run.knowledge_version = exc.knowledge_version
@@ -708,6 +574,28 @@ async def deliver_output(output_id: UUID) -> None:
     async with open_session() as session:
         output = await session.get(SlackOutput, output_id, with_for_update=True)
         if output is None or output.status != DeliveryStatus.PENDING:
+            return
+        stale = False
+        if output.agent_run_id and output.kind != SlackOutputKind.FEEDBACK_FLAVOR:
+            run = await session.get(AgentRun, output.agent_run_id)
+            trigger = await session.get(Message, run.trigger_message_id) if run else None
+            if trigger:
+                stale = (
+                    await session.scalar(
+                        select(Message.id)
+                        .where(
+                            Message.conversation_id == output.conversation_id,
+                            Message.direction == "inbound",
+                            Message.event_at > trigger.event_at,
+                        )
+                        .limit(1)
+                    )
+                    is not None
+                )
+        if config.global_mode == GlobalMode.OFF or stale:
+            output.status = DeliveryStatus.CANCELLED
+            output.last_error = "disabled" if config.global_mode == GlobalMode.OFF else "superseded"
+            await session.commit()
             return
         output.attempts += 1
         await session.commit()

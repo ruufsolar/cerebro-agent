@@ -4,7 +4,7 @@ This directory is the reviewed production-environment path for Cerebro. It provi
 dedicated, private Azure VM that runs the existing Docker Compose topology, plus the Azure
 network, stable outbound address, managed data disk, managed identity, and Key Vault needed
 to operate it. It does **not** deploy automatically and it does not promote Cerebro beyond
-its current controlled-pilot capability state.
+its current capabilities; infrastructure activation is not an accuracy certification.
 
 The design intentionally keeps the runtime close to the proven Wattson baseline. Moving
 five stateful/long-running processes to Kubernetes or Container Apps in the same change
@@ -35,7 +35,7 @@ monolith ──POST /integrations/bank-movements──▶ ingress IP ───�
   `web` and answering 404 for everything else. `/health`, `/ready`, PostgreSQL, the workers,
   and SSH stay private, and the NSG denies their ports by name as well as by default.
   See [ADR-011](../../docs/adr/011-public-bank-movement-ingress.md) and the
-  [public ingress runbook](../../docs/operations/ingress.md).
+  [public ingress runbook](../../docs/integrations.md).
 - A Standard NAT Gateway gives all outbound traffic a stable address. Give
   `terraform output -raw outbound_public_ip` to the replica owner for allowlisting.
 - The system-assigned VM identity can read only this deployment's Key Vault secrets.
@@ -60,7 +60,7 @@ Approve these choices before applying:
 3. The stable NAT IP as an allowed source at the production read replica.
 4. The Entra object ID that may seed/rotate this vault's secrets.
 5. Publishing images to this deployment's Azure Container Registry from `main`.
-6. Initial mode. Use `off` for provisioning, then explicitly seed `review` for the pilot.
+6. Initial mode. Use `off` for provisioning, then explicitly seed `enabled` for responding (`review` remains a compatibility alias).
 7. Acceptance of the pilot's availability boundary: one VM, one local PostgreSQL, and
    backups on the same managed disk. This is recoverable infrastructure, not HA/GA.
 8. Whether this deployment has a public ingress at all, and if so: the hostname, where its
@@ -240,11 +240,11 @@ afterwards. Then, on the VM, it:
 When the deployment has a public hostname, activation also waits for the proxy to listen
 before reporting success, and preflight gains a `bank_ingestion` check that reads Authentik's
 key set. The full setup, validation, and rollback sequence is the
-[public ingress runbook](../../docs/operations/ingress.md); the DNS record must resolve
+[public ingress runbook](../../docs/integrations.md); the DNS record must resolve
 before this step, because Caddy asks for the certificate on its first start.
 
 Keep production `off` until preflight, the rollback drill, and the pilot channel are ready.
-To enter review mode, reseed with `--mode review` and run `activate.sh` again. Secret or mode
+To enable responses, reseed with `--mode enabled` and run `activate.sh` again. Secret or mode
 changes force the same safe drain/recreate path even when the image digest is unchanged.
 
 ## Operations
@@ -272,7 +272,7 @@ az vm run-command invoke --resource-group "$RESOURCE_GROUP" --name "$VM_NAME" \
   --scripts 'cd /etc/cerebro-agent && docker compose --env-file compose.env exec -T web python -m cerebro.ops.preflight --profile pilot'
 ```
 
-The checked-in deployment runbook covers drain, rollback, backup, and pilot-gate commands.
+The checked-in deployment runbook covers drain, rollback, backup, and optional quality-report commands.
 Never include `docker inspect`, environment files, raw container logs, or Key Vault values
 in a ticket.
 

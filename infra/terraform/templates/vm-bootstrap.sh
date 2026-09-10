@@ -181,7 +181,7 @@ if [ -n "$PUBLIC_HOSTNAME" ]; then
 fi
 
 [[ "$DB_PASSWORD" =~ ^[A-Za-z0-9]+$ ]] || fail "database password must be alphanumeric"
-[[ "$GLOBAL_MODE" =~ ^(off|shadow|review|apply)$ ]] || fail "global mode is invalid"
+[[ "$GLOBAL_MODE" =~ ^(off|enabled|review)$ ]] || fail "mode must be off or enabled (review alias accepted)"
 [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9._-]+$ ]] || fail "image tag is invalid"
 [ -z "$RUUF_AGENTS_URL" ] || [[ "$RUUF_AGENTS_URL" =~ ^https://[^[:space:]/]+$ ]] || \
   fail "shared memory URL must be https://<host> with no path"
@@ -228,8 +228,6 @@ runtime_tmp=$(mktemp /etc/cerebro-agent/env.XXXXXX)
   write_env_value OPENAI_AGENTS_DONT_LOG_MODEL_DATA 1
   write_env_value OPENAI_AGENTS_DONT_LOG_TOOL_DATA 1
   write_env_value CEREBRO_GLOBAL_MODE "$GLOBAL_MODE"
-  write_env_value CEREBRO_PAYMENT_WRITES_ENABLED false
-  write_env_value CEREBRO_HOLD_WRITES_ENABLED false
   write_env_value CEREBRO_EXTERNAL_TRACING_ENABLED false
   write_env_value CEREBRO_MAX_AGENT_TURNS 8
   write_env_value CEREBRO_MAX_TOOL_CALLS 20

@@ -20,6 +20,7 @@ class DeliveryStatus(StrEnum):
     PENDING = "pending"
     SENT = "sent"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class SlackEventDisposition(StrEnum):

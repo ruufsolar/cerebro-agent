@@ -7,7 +7,7 @@ from uuid import UUID
 import asyncpg
 import pytest
 
-from cerebro.agent.data_tools import PaymentCandidateQuery
+from cerebro.agent.data_tools import PaymentCandidateQuery, VambeQuery
 from cerebro.agent.models import EvidenceKind
 from cerebro.config import AppConfig
 from cerebro.replica.database import QueryResult, ReplicaDatabase
@@ -15,6 +15,39 @@ from cerebro.replica.investigation import ReplicaInvestigationData
 from cerebro.replica.scope import load_knowledge
 
 KNOWLEDGE_DIR = Path(__file__).parents[2] / "knowledge"
+
+
+@pytest.mark.parametrize(
+    "glosa, exact",
+    [
+        ("Pago OTRA, CALLE 12 Santiago", True),
+        ("Pago Otra Calle 123 Santiago", False),
+        ("Pago Otra Calle 12 Santiaguito", False),
+    ],
+)
+async def test_exact_address_requires_complete_tokens(glosa: str, exact: bool) -> None:
+    database = _CandidateDatabase({"full_address": "Otra Calle 12 Santiago"})
+    data = ReplicaInvestigationData(
+        cast(ReplicaDatabase, database), load_knowledge(KNOWLEDGE_DIR), KNOWLEDGE_DIR
+    )
+    observation = await data.search_payment_candidates(
+        PaymentCandidateQuery(glosa_or_address=glosa, transferor_name="Alberto Amigo")
+    )
+    kinds = {signal.kind for signal in observation.candidates[0].evidence}
+    assert (EvidenceKind.EXACT_ADDRESS in kinds) == exact
+
+
+async def test_vambe_text_hit_never_becomes_payment_confirmation() -> None:
+    class Database:
+        async def fetch_bounded(self, query: str, *args: object, **kwargs: object) -> QueryResult:
+            row = {"user_id": str(UUID(int=1)), "phone": "123", "content": "No pagué"}
+            return QueryResult(tuple(row), (row,), 1, False)
+
+    data = ReplicaInvestigationData(
+        cast(ReplicaDatabase, Database()), load_knowledge(KNOWLEDGE_DIR), KNOWLEDGE_DIR
+    )
+    result = await data.search_vambe_messages(VambeQuery(order_id=UUID(int=2), query="pago"))
+    assert [signal.kind for signal in result.evidence] == [EvidenceKind.VAMBE_MENTION]
 
 
 class _Context:

@@ -333,7 +333,7 @@ def _candidate(
     requested_currency = getattr(request, "currency", None) or "CLP"
     if requested_address:
         left, right = _plain(requested_address), _plain(address)
-        if right and right in left:
+        if right and f" {right} " in f" {left} ":
             evidence.append(
                 _signal(
                     row,
@@ -1166,14 +1166,11 @@ class ReplicaInvestigationData:
         if result.row_count and request.query and request.order_id:
             evidence.append(
                 EvidenceSignal(
-                    kind=EvidenceKind.VAMBE_CONTEXT,
+                    kind=EvidenceKind.VAMBE_MENTION,
                     source=EvidenceSource.VAMBE,
                     polarity=EvidencePolarity.SUPPORTING,
                     strength=EvidenceStrength.WEAK,
-                    description=(
-                        "Vambe contiene mensajes del candidato que coinciden "
-                        "con la búsqueda de pago."
-                    ),
+                    description=("Vambe contiene menciones relacionadas; no confirman un pago."),
                     order_id=str(request.order_id),
                 )
             )

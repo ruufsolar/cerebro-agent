@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic
+from typing import cast
 from uuid import uuid4
 
 from PIL import Image, ImageDraw
@@ -24,7 +25,14 @@ from cerebro.agent.runner import (
 from cerebro.config import get_config
 from cerebro.evals.corpus import EvalCase, load_corpus
 from cerebro.ops.metrics import latency_summary
-from cerebro.slack.pipeline import render_response
+from cerebro.slack.rendering import render_response
+
+
+def has_hard_failures(errors: list[str]) -> bool:
+    return any(
+        error.startswith(("route:", "format:", "unsupported:", "claims:", "tools:forbidden"))
+        for error in errors
+    )
 
 
 def grade_case(case: EvalCase, result: RunnerResult, rendered: str) -> list[str]:
@@ -119,7 +127,9 @@ def _write_screenshot(path: Path, lines: list[str]) -> None:
 
 async def _run_case(case: EvalCase) -> tuple[RunnerResult, str, int]:
     config = get_config()
-    runner = OpenAIAgentsRunner(config, data=FixtureInvestigationData(case.observations))
+    runner = OpenAIAgentsRunner(
+        config, data=FixtureInvestigationData(case.observations), shared_memory_enabled=False
+    )
     try:
         with TemporaryDirectory(prefix="cerebro-eval-") as temporary_directory:
             image_paths: tuple[Path, ...] = ()
@@ -223,7 +233,10 @@ async def run_live(json_output: Path | None = None, case_ids: set[str] | None = 
             f"order={actual_order} errors={','.join(errors) or '-'}"
         )
     required_correct = 17 if case_ids is None else len(cases)
-    passed = correct >= required_correct and wrong_high == 0 and unsupported == 0
+    hard_failures = any(has_hard_failures(cast(list[str], row["errors"])) for row in rows)
+    passed = (
+        correct >= required_correct and wrong_high == 0 and unsupported == 0 and not hard_failures
+    )
     report = {
         "corpus_version": corpus.version,
         "deployment": config.azure_deployment_main,

@@ -2,7 +2,8 @@ from dataclasses import dataclass
 from hashlib import sha256
 
 from sqlglot import exp, parse
-from sqlglot.errors import ParseError
+from sqlglot.errors import OptimizeError, ParseError
+from sqlglot.optimizer.scope import Scope, traverse_scope
 
 from cerebro.replica.scope import DataScope
 
@@ -61,20 +62,27 @@ def validate_readonly_sql(query: str, scope: DataScope) -> ValidatedSql:
             value = projection.unalias()
             if isinstance(value, exp.Star) or (isinstance(value, exp.Column) and value.is_star):
                 raise SqlPolicyError("SELECT * is not allowed; name the required columns")
-    with_clause = statement.args.get("with_") or statement.args.get("with")
-    if with_clause is not None and with_clause.args.get("recursive"):
+    if any(clause.args.get("recursive") for clause in statement.find_all(exp.With)):
         raise SqlPolicyError("recursive CTEs are not allowed")
 
-    cte_names = {cte.alias_or_name.lower() for cte in statement.find_all(exp.CTE)}
+    # A nested CTE alias must not whitelist an unrelated outer physical table.
+    cte_references: set[int] = set()
+    try:
+        for query_scope in traverse_scope(statement):
+            for node, source in query_scope.selected_sources.values():
+                if isinstance(source, Scope):
+                    cte_references.add(id(node))
+    except OptimizeError as exc:
+        raise SqlPolicyError("query scopes are ambiguous") from exc
     relations: set[str] = set()
     for table in statement.find_all(exp.Table):
         if isinstance(table.this, exp.Func):
             raise SqlPolicyError("table functions are not allowed")
         name = table.name.lower()
         schema = table.db.lower() if table.db else ""
-        if name in cte_names and not schema:
+        if id(table) in cte_references and not schema and not table.catalog:
             continue
-        if schema not in {"", "public"}:
+        if table.catalog or schema not in {"", "public"}:
             raise SqlPolicyError("only public or unqualified relations are allowed")
         if name.startswith("pg_") or name == "information_schema":
             raise SqlPolicyError("catalog access is not allowed")

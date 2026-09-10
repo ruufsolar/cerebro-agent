@@ -1,84 +1,38 @@
-# cerebro-agent
+# Cerebro
 
-Cerebro is FinOps' internal back-office agent. Its grounded payment capability investigates an
-incoming payment from a Slack mention (text and/or screenshots), searches Ruuf's
-read-only operational data, and replies in the same thread with a customer candidate,
-evidence, uncertainty, and a FinOps CRM link. Other mentions receive bounded, in-character
-conversation with approved read-only FinOps access.
+FinOps' independent Python back-office agent: grounded payment identification and in-character
+general conversation in Slack, with Azure reasoning, screenshots and a read-only monolith replica.
+Cerebro is used in production. No business writes or automatic bank processing are implemented.
 
-This repository is intentionally independent from the monolith. V0 is read-only with
-respect to business data: the only external side effect is a Slack thread reply. Future
-payment registration and hold actions will use approval-gated monolith APIs.
+## Start here
 
-## Current state
+- [Product and current behavior](docs/product.md)
+- [Development and local testing](docs/development.md)
+- [Architecture and recovery](docs/architecture.md)
+- [Agent behavior, personality and tools](docs/agent-behavior.md)
+- [Integrations and credentials](docs/integrations.md)
+- [Operations, CD and rollback](docs/operations.md)
+- [Evaluations and feedback](docs/evaluations.md)
+- [Roadmap and unresolved decisions](docs/roadmap.md)
 
-Slice 6B is implemented in code: a structured no-tool router selects either the grounded payment
-specialist or a general specialist limited to knowledge/schema/scoped SQL. The bounded Agents SDK
-investigator can use a dedicated monolith
-read replica through six audited tools for policy/schema lookup, candidate search,
-candidate verification, Vambe context, and allowlisted SQL. A recommendation is accepted
-only after deterministic candidate verification. Static PNG/JPEG/WebP screenshots from the
-triggering Slack message are securely downloaded, validated, sent as high-detail ephemeral
-model input, and deleted. The configured model default is GPT-5.6 Sol. Tool evidence is
-referenced through per-run IDs, and application code owns outcomes, confidence, CRM links,
-ranking, and concise Spanish prose. Isolated control/agent workers, runtime readiness,
-privacy-safe local logs, and aggregate preflight/status/pilot tooling harden the pilot.
-Slack replies have no preview banner; payment begins with `Resultado`, while general answers are
-concise and preserve complete sentences.
-The live eval and controlled FinOps pilot still gate
-promotion beyond preview. Without Azure credentials, the
-deterministic fake runner remains available; replica preflight and integration tests can
-still run independently with the synthetic profile.
+[Azure Terraform deployment](infra/terraform/README.md) is the canonical infrastructure guide.
+[ADRs](docs/adr/012-operational-simplification.md) preserve decision history.
 
-Start with:
+## Quick start
 
-- [Wiki index](docs/README.md)
-- [Quickstart](docs/getting-started/quickstart.md)
-- [Current state](docs/product/current-state.md)
-- [External setup checklist](docs/operations/external-setup.md)
-- [Azure production Terraform](infra/terraform/README.md)
-- [Delivery plan](docs/delivery/vertical-slices.md)
-
-## Local smoke test
+Create a private `.env` from `deploy/env.example` if one does not exist. Never overwrite existing
+credentials. Then:
 
 ```bash
-cp deploy/env.example .env
 docker compose -f deploy/compose.local.yml up --build
 curl http://localhost:8000/health
 curl http://localhost:8000/ready
 ```
 
-To connect the existing Slack app, add its `xapp`/`xoxb` tokens to `.env`, set
-`CEREBRO_GLOBAL_MODE=review`, ensure no other process is using those Socket Mode
-credentials, and opt into the Slack profile:
+This starts the foundation without Slack. Follow the development guide before enabling real
+connections. `enabled` responds; `off` disables new work/output; existing `review` is an
+alias for `enabled`. Retired `shadow`/`apply` values fail explicitly.
 
-```bash
-docker compose -f deploy/compose.local.yml --profile slack up --build
-```
-
-See [local Slack testing](docs/getting-started/local-slack-testing.md) before doing this.
-
-To enable real model reasoning, also configure the Azure endpoint/key/deployment described
-in [Azure OpenAI setup](docs/integrations/azure-openai.md). Validate the synthetic corpus
-without calling Azure from `api/` with `uv run python -m cerebro.evals.run`; add `--live`
-only when approved credentials are present.
-
-To test the replica data boundary without Azure or Slack:
-
-```bash
-docker compose -f deploy/compose.local.yml --profile replica up -d replica --wait
-cd api
-CEREBRO_TEST_REPLICA_URL=postgresql://cerebro_reader:local-read-only@localhost:5433/monolith_fixture \
-  uv run pytest -m integration tests/test_replica_integration.py
-```
-
-For Python-only development, install `uv`, then run from `api/`:
-
-```bash
-uv sync
-uv run ruff check src tests
-uv run pyright src tests
-uv run pytest
-```
-
-See [AGENTS.md](AGENTS.md) before changing the repository.
+Tests never require production access. Destructive DB fixtures require a separate
+`CEREBRO_TEST_DATABASE_URL` whose database name ends in `_test`.
+Read [AGENTS.md](AGENTS.md) before changing code.

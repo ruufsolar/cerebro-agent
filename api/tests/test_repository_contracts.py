@@ -1,9 +1,59 @@
 import re
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.mark.parametrize(
+    "response, exit_code, accepted",
+    [
+        ("0", 0, True),
+        ("2", 0, True),
+        ("", 0, False),
+        ("invalid", 0, False),
+        ("", 1, False),
+    ],
+)
+def test_deploy_queue_check_never_treats_database_failure_as_idle(
+    response: str, exit_code: int, accepted: bool
+) -> None:
+    source = (REPO_ROOT / "deploy/cerebro-agent-update.sh").read_text()
+    definitions = []
+    for name in ("running_jobs", "checked_running_jobs"):
+        match = re.search(rf"^{name}\(\) \{{\n.*?^\}}", source, re.M | re.S)
+        assert match is not None
+        definitions.append(match.group())
+    script = "\n".join(
+        [
+            "set -euo pipefail",
+            *definitions,
+            'compose() { printf \'%s\' "$TEST_OUTPUT"; return "$TEST_EXIT"; }',
+            "COMPOSE=(compose)",
+            "checked_running_jobs",
+        ]
+    )
+    result = subprocess.run(
+        ["bash", "-c", script],
+        env={"TEST_OUTPUT": response, "TEST_EXIT": str(exit_code)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert (result.returncode == 0) is accepted
+
+
+def test_consolidated_documentation_links_resolve() -> None:
+    paths = [REPO_ROOT / "README.md", REPO_ROOT / "infra/terraform/README.md"]
+    paths.extend((REPO_ROOT / "docs").rglob("*.md"))
+    for path in paths:
+        for target in re.findall(r"\]\(([^)]+)\)", path.read_text()):
+            if "://" in target or target.startswith("#"):
+                continue
+            assert (path.parent / target.split("#")[0]).exists(), f"{path.name}: {target}"
 
 
 def test_manifest_contains_v0_thread_and_feedback_events() -> None:

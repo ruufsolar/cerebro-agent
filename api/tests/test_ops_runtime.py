@@ -78,11 +78,10 @@ async def test_pilot_readiness_requires_complete_config_and_fresh_components(
     assert set(report["checks"]["components"].values()) == {"ok"}
 
 
-async def test_pilot_readiness_rejects_enabled_business_writes(clean_database) -> None:
+async def test_pilot_readiness_rejects_missing_configuration(clean_database) -> None:
     config = AppConfig(
         database_url=get_config().database_url,
         readiness_profile=ReadinessProfile.PILOT,
-        payment_writes_enabled=True,
     )
 
     ready, report = await readiness_report(config)

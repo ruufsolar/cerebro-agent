@@ -58,7 +58,7 @@ running_jobs() {
     SELECT count(*) FROM procrastinate_jobs j
       JOIN procrastinate_workers w ON w.id = j.worker_id
      WHERE j.status = 'doing' AND w.last_heartbeat > now() - interval '60 seconds'" 2>/dev/null \
-    | tr -d '[:space:]' || echo 0
+    | tr -d '[:space:]'
 }
 
 orphaned_jobs() {
@@ -81,10 +81,24 @@ fi
 # then abandoned, which is the answer a client retrying a 202 contract can act on.
 "${COMPOSE[@]}" stop --timeout "$DRAIN_TIMEOUT_S" "${INGRESS[@]}"
 
+# Failure to read the queue is not proof that it is empty. Resume the old services
+# on any drain error, without changing the senior-maintained activation/CD flow.
+resume_on_drain_error() {
+  echo "cerebro-agent: drain failed; resuming existing services" >&2
+  "${COMPOSE[@]}" start control-worker agent-worker "${INGRESS[@]}" || true
+}
+trap resume_on_drain_error ERR
+checked_running_jobs() {
+  local count
+  count=$(running_jobs) || return 1
+  [[ "$count" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$count"
+}
+
 waited=0
 while [ "$waited" -lt "$DRAIN_TIMEOUT_S" ]; do
-  busy=$(running_jobs)
-  if [ -z "$busy" ] || [ "$busy" == "0" ]; then
+  busy=$(checked_running_jobs)
+  if [ "$busy" == "0" ]; then
     break
   fi
   echo "cerebro-agent: waiting for $busy in-flight job(s) (${waited}s)"
@@ -92,7 +106,7 @@ while [ "$waited" -lt "$DRAIN_TIMEOUT_S" ]; do
   waited=$((waited + 10))
 done
 
-busy=$(running_jobs)
+busy=$(checked_running_jobs)
 if [ -n "$busy" ] && [ "$busy" != "0" ]; then
   echo "cerebro-agent: aborting deploy with $busy in-flight job(s) after ${DRAIN_TIMEOUT_S}s" >&2
   "${COMPOSE[@]}" start "${INGRESS[@]}"
@@ -103,7 +117,7 @@ fi
 # race between the final drain check and Compose recreation. Queued jobs remain durable.
 "${COMPOSE[@]}" stop --timeout "$DRAIN_TIMEOUT_S" control-worker agent-worker
 
-busy=$(running_jobs)
+busy=$(checked_running_jobs)
 if [ -n "$busy" ] && [ "$busy" != "0" ]; then
   echo "cerebro-agent: aborting deploy because work restarted during worker drain" >&2
   "${COMPOSE[@]}" start control-worker agent-worker "${INGRESS[@]}"
@@ -111,6 +125,7 @@ if [ -n "$busy" ] && [ "$busy" != "0" ]; then
 fi
 
 # last-good must be the image production is running now, not an earlier local copy of the
+trap - ERR
 # tag being deployed; on a normal deploy of a new tag the latter does not exist yet.
 running=$(docker inspect --format '{{.Image}}' cerebro-agent-web-1 2>/dev/null | tr -d '[:space:]' || true)
 if [ -n "$running" ]; then

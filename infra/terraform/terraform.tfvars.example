@@ -15,7 +15,7 @@ github_repository_id      = 1349707290
 # Public HTTPS ingress for the monolith's bank-payment events. Leave ingress_hostname empty
 # and nothing here is created: no public address, no inbound rule, no certificate. It must
 # match the CEREBRO_PUBLIC_HOSTNAME the secret seeder reads, or the address and the listener
-# end up on different names. See docs/operations/ingress.md.
+# end up on different names. See docs/integrations.md.
 ingress_hostname = ""
 # ingress_hostname = "cerebro.ruuf.cl"
 # Narrow this to the monolith's egress addresses once the platform owner confirms them.

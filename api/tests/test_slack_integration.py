@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 from PIL import Image
 from sqlalchemy import func, select
+from sqlalchemy import text as sql_text
 
 from cerebro.agent.models import (
     AgentUsage,
@@ -37,7 +38,8 @@ from cerebro.db.models import (
     ToolCall,
 )
 from cerebro.db.session import open_session
-from cerebro.jobs.tasks import recover_pending_work
+from cerebro.jobs.app import app as job_app
+from cerebro.jobs.tasks import recover_interrupted_jobs, recover_pending_work
 from cerebro.slack.events import normalize_event
 from cerebro.slack.gateway import set_slack_gateway
 from cerebro.slack.images import DownloadedImage, set_slack_file_client
@@ -195,16 +197,152 @@ async def store_and_process(body: dict[str, Any]) -> None:
     await process_stored_event(event_id)
 
 
+@pytest.mark.parametrize("stage", ["event", "run", "output"])
+async def test_off_gate_stops_previously_queued_work(
+    clean_database: None, memory_jobs: Any, monkeypatch: pytest.MonkeyPatch, stage: str
+) -> None:
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "enabled")
+    get_config.cache_clear()
+    gateway = FakeSlackGateway()
+    set_slack_gateway(gateway)
+    run: AgentRun | None = None
+    event_id = await receive_event(
+        normalize_event(
+            message_envelope("off-after-ingestion"), bot_user_id="BOT", config=get_config()
+        )
+    )
+    assert event_id is not None
+    if stage != "event":
+        await process_stored_event(event_id)
+        async with open_session() as session:
+            run = await session.scalar(select(AgentRun))
+        assert run is not None
+        if stage == "output":
+            await execute_run(run.id)
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "off")
+    get_config.cache_clear()
+    if stage == "event":
+        await process_stored_event(event_id)
+        async with open_session() as session:
+            assert await session.scalar(select(func.count()).select_from(AgentRun)) == 0
+    elif stage == "run":
+        assert run is not None
+        await execute_run(run.id)
+        async with open_session() as session:
+            stored = await session.get(AgentRun, run.id)
+            assert stored is not None and stored.status == RunStatus.CANCELLED
+    else:
+        async with open_session() as session:
+            output = await session.scalar(select(SlackOutput))
+        assert output is not None
+        await deliver_output(output.id)
+        async with open_session() as session:
+            stored_output = await session.get(SlackOutput, output.id)
+            assert stored_output is not None and stored_output.status == DeliveryStatus.CANCELLED
+    assert gateway.posts == []
+
+
+async def test_new_message_cancels_already_rendered_pending_output(
+    clean_database: None, memory_jobs: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "enabled")
+    get_config.cache_clear()
+    gateway = FakeSlackGateway()
+    set_slack_gateway(gateway)
+    await store_and_process(message_envelope("old"))
+    async with open_session() as session:
+        run = await session.scalar(select(AgentRun))
+    assert run is not None
+    await execute_run(run.id)
+    async with open_session() as session:
+        output = await session.scalar(select(SlackOutput))
+    assert output is not None
+    await store_and_process(message_envelope("new", event_type="message", ts="101.1"))
+    await deliver_output(output.id)
+    async with open_session() as session:
+        stored = await session.get(SlackOutput, output.id)
+        assert stored is not None and stored.status == DeliveryStatus.CANCELLED
+    assert gateway.posts == []
+
+
+async def test_successful_run_survives_outbox_enqueue_failure(
+    clean_database: None, memory_jobs: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from cerebro.slack import pipeline
+
+    async def unavailable(*args: object) -> None:
+        raise ConnectionError("test-only queue failure")
+
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "enabled")
+    get_config.cache_clear()
+    set_slack_gateway(FakeSlackGateway())
+    await store_and_process(message_envelope("outbox-gap"))
+    async with open_session() as session:
+        run = await session.scalar(select(AgentRun))
+    assert run is not None
+    monkeypatch.setattr(pipeline, "enqueue_slack_output", unavailable)
+    await execute_run(run.id)
+    async with open_session() as session:
+        stored = await session.get(AgentRun, run.id)
+        outputs = list((await session.scalars(select(SlackOutput))).all())
+    assert stored is not None and stored.status == RunStatus.SUCCEEDED
+    assert len(outputs) == 1
+    assert outputs[0].status == DeliveryStatus.PENDING
+    assert outputs[0].kind == SlackOutputKind.INVESTIGATION
+
+
+async def test_dead_worker_recovery_releases_real_queue_lock_without_replaying_run(
+    clean_database: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "enabled")
+    get_config.cache_clear()
+    async with job_app.open_async():
+        await store_and_process(message_envelope("dead-worker"))
+        async with open_session() as session:
+            run = await session.scalar(select(AgentRun))
+            assert run is not None
+            run.status = RunStatus.RUNNING
+            await session.commit()
+        worker_id = await job_app.job_manager.register_worker()
+        job = await job_app.job_manager.fetch_job(queues=["agent"], worker_id=worker_id)
+        assert job is not None
+        await recover_interrupted_jobs()
+        async with open_session() as session:
+            stored = await session.get(AgentRun, run.id)
+            assert stored is not None and stored.status == RunStatus.RUNNING
+            await session.execute(
+                sql_text(
+                    "UPDATE procrastinate_workers "
+                    "SET last_heartbeat = now() - interval '61 seconds' "
+                    "WHERE id = :worker_id"
+                ),
+                {"worker_id": worker_id},
+            )
+            await session.commit()
+        await recover_interrupted_jobs()
+        await recover_interrupted_jobs()
+        async with open_session() as session:
+            stored = await session.get(AgentRun, run.id)
+            assert stored is not None and stored.status == RunStatus.FAILED
+            assert stored.error_code == "worker_interrupted"
+            assert await session.scalar(select(func.count()).select_from(SlackOutput)) == 1
+            status = await session.scalar(
+                sql_text("SELECT status::text FROM procrastinate_jobs WHERE id = :job_id"),
+                {"job_id": job.id},
+            )
+            assert status == "failed"
+        assert await job_app.job_manager.fetch_job(queues=["agent"], worker_id=worker_id) is None
+
+
 @pytest.mark.parametrize(
     ("mode", "expected_runs", "expected_outputs", "expected_statuses"),
     [
         ("off", 0, 0, 0),
-        ("shadow", 1, 0, 0),
+        ("enabled", 1, 1, 1),
         ("review", 1, 1, 1),
-        ("apply", 1, 1, 1),
     ],
 )
-async def test_mode_gate_has_no_slack_effect_in_off_or_shadow(
+async def test_mode_gate_has_no_slack_effect_in_off(
     clean_database: None,
     memory_jobs: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -591,7 +729,7 @@ async def test_feedback_is_scoped_and_plug_flavor_is_not_recursive(
     assert flavor_count == 1
 
 
-async def test_shadow_records_feedback_without_flavor_reply(
+async def test_off_ignores_feedback_without_flavor_reply(
     clean_database: None,
     memory_jobs: Any,
     monkeypatch: pytest.MonkeyPatch,
@@ -611,7 +749,7 @@ async def test_shadow_records_feedback_without_flavor_reply(
     assert investigation is not None
     await deliver_output(investigation.id)
 
-    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "shadow")
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "off")
     get_config.cache_clear()
     await store_and_process(
         reaction_envelope("Ev-shadow-plug", "reaction_added", "electric_plug", "200.1")
@@ -624,7 +762,7 @@ async def test_shadow_records_feedback_without_flavor_reply(
             .select_from(SlackOutput)
             .where(SlackOutput.kind == SlackOutputKind.FEEDBACK_FLAVOR)
         )
-    assert feedback_count == 1
+    assert feedback_count == 0
     assert flavor_count == 0
 
 
@@ -708,7 +846,8 @@ async def test_agents_sdk_metadata_and_tool_audit_are_persisted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del clean_database, memory_jobs
-    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "shadow")
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "enabled")
+    set_slack_gateway(FakeSlackGateway())
     get_config.cache_clear()
     set_agent_runner(
         FakeAgentRunner(
@@ -760,7 +899,8 @@ async def test_failed_runner_persists_partial_tool_audit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del clean_database, memory_jobs
-    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "shadow")
+    monkeypatch.setenv("CEREBRO_GLOBAL_MODE", "enabled")
+    set_slack_gateway(FakeSlackGateway())
     get_config.cache_clear()
 
     class AuditedFailureRunner:

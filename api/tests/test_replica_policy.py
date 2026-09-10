@@ -8,6 +8,32 @@ from cerebro.replica.sql_policy import SqlPolicyError, validate_readonly_sql
 KNOWLEDGE_DIR = Path(__file__).parents[2] / "knowledge"
 
 
+@pytest.mark.parametrize(
+    "query",
+    [
+        (
+            "SELECT id FROM secret_table WHERE id IN "
+            "(WITH secret_table AS (SELECT 1 AS id) SELECT id FROM secret_table)"
+        ),
+        "WITH secret_table AS (SELECT id FROM secret_table) SELECT id FROM secret_table",
+        "SELECT id FROM other_database.public.account_receivable",
+        "SELECT id FROM (WITH RECURSIVE x AS (SELECT 1 AS id) SELECT id FROM x) q",
+    ],
+)
+def test_cte_names_cannot_bypass_physical_relation_policy(query: str) -> None:
+    with pytest.raises(SqlPolicyError):
+        validate_readonly_sql(query, load_knowledge(KNOWLEDGE_DIR).scope)
+
+
+def test_nested_cte_shadowing_is_scoped_not_globally_rejected() -> None:
+    result = validate_readonly_sql(
+        "WITH x AS (SELECT id FROM account_receivable) "
+        "SELECT id FROM x WHERE id IN (WITH x AS (SELECT 1 AS id) SELECT id FROM x)",
+        load_knowledge(KNOWLEDGE_DIR).scope,
+    )
+    assert result.relations == ("account_receivable",)
+
+
 def test_knowledge_scope_and_catalog_are_versioned_and_complete() -> None:
     knowledge = load_knowledge(KNOWLEDGE_DIR)
 

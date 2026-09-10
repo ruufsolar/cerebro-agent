@@ -15,7 +15,16 @@ from cerebro.agent.models import (
 )
 from cerebro.db.enums import DeliveryStatus, RunStatus, SlackOutputKind
 from cerebro.db.models import AgentRun, Feedback, Message, SlackOutput, ToolCall
-from cerebro.ops.pilot_gate import PilotRow, grade_rows
+from cerebro.ops.pilot_gate import PilotRow, QualityPolicy, grade_rows
+
+
+def test_optional_report_accepts_any_nonempty_sample_and_explicit_thresholds() -> None:
+    rows = [_case(index) for index in range(3)]
+    policy = QualityPolicy(expected_cases=None, min_image_cases=0)
+    assert grade_rows(rows, policy)["passed"]
+    assert not grade_rows([], policy)["passed"]
+    assert "case_count" in grade_rows(rows, QualityPolicy(5, 0))["errors"]
+    assert "image_case_count" in grade_rows(rows, QualityPolicy(3, 1))["errors"]
 
 
 def _case(index: int, *, image: bool = False) -> PilotRow:

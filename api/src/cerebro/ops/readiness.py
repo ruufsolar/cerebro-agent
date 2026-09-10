@@ -1,14 +1,18 @@
 """Dependency-free liveness and local-state readiness checks."""
 
+from pathlib import Path
 from typing import Any
 
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
 from cerebro.config import AppConfig, ReadinessProfile, get_config
 from cerebro.db.session import open_session
 from cerebro.ops.runtime import PILOT_COMPONENTS, component_health
 
-MIGRATION_HEAD = "20260907_0006"
+MIGRATION_HEAD = ScriptDirectory(
+    str(Path(__file__).resolve().parents[1] / "db" / "migrations")
+).get_current_head()
 
 
 async def readiness_report(config: AppConfig | None = None) -> tuple[bool, dict[str, Any]]:

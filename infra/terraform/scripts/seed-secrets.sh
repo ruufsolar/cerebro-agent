@@ -61,8 +61,8 @@ if [ -z "$IMAGE_TAG" ]; then
   IMAGE_TAG=$(vault_value image-tag)
   [ -n "$IMAGE_TAG" ] || IMAGE_TAG=main
 fi
-[[ "$GLOBAL_MODE" =~ ^(off|shadow|review|apply)$ ]] || {
-  echo "mode must be off, shadow, review, or apply" >&2
+[[ "$GLOBAL_MODE" =~ ^(off|enabled|review)$ ]] || {
+  echo "mode must be off or enabled (review is a compatibility alias)" >&2
   exit 2
 }
 [[ "$IMAGE_TAG" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "image tag is invalid" >&2; exit 2; }

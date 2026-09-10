@@ -81,6 +81,25 @@ def test_azure_url_and_automatic_backend_selection() -> None:
     assert isinstance(build_agent_runner(AppConfig()), FakeAgentRunner)
     with pytest.raises(ValueError, match="must be set together"):
         build_agent_runner(AppConfig(azure_openai_endpoint="https://example.test"))
+    with pytest.raises(ValueError, match="fake runner disabled"):
+        build_agent_runner(AppConfig(environment="production"))
+
+
+async def test_eval_runner_never_initializes_shared_memory(monkeypatch: pytest.MonkeyPatch) -> None:
+    from cerebro.agent import shared_memory
+
+    def forbidden_client() -> None:
+        raise AssertionError("evaluation accessed shared memory")
+
+    monkeypatch.setattr(shared_memory, "client", forbidden_client)
+    runner = OpenAIAgentsRunner(
+        AppConfig(azure_openai_endpoint="https://example.test", azure_openai_api_key="test"),
+        shared_memory_enabled=False,
+    )
+    try:
+        assert runner._memory_tools(RunState(max_tool_calls=20)) == []
+    finally:
+        await runner.close()
 
 
 def test_tool_amount_schema_is_azure_compatible_and_runtime_value_is_decimal() -> None:
@@ -714,7 +733,7 @@ async def test_safe_sdk_outcomes_return_unknown(
     assert isinstance(result, AgentRunResult)
     assert result.identification.confidence is Confidence.UNKNOWN
     assert result.completion_reason is reason
-    assert result.prompt_version == "payment-identification-slice5-v3"
+    assert result.prompt_version == "payment-identification-v4"
 
 
 async def test_success_records_usage_and_disables_sensitive_tracing(

@@ -119,7 +119,14 @@ async def load() -> MemoryContext | None:
     now = time.monotonic()
     if cached is not None and now - cached.fetched_at < BRIEF_TTL_SECONDS:
         return cached.context
-    brief = await memory.brief_detail(token_budget=BRIEF_TOKEN_BUDGET)
+    try:
+        brief = await memory.brief_detail(token_budget=BRIEF_TOKEN_BUDGET)
+    except (ValueError, TypeError, AttributeError, KeyError):
+        # The upstream-generated client may raise on malformed JSON/schema.
+        if cached is not None and now - cached.fetched_at < BRIEF_MAX_STALE_SECONDS:
+            return cached.context
+        forget()
+        return None
     if not brief:
         # An unreachable platform and an empty store look the same from here, so
         # a brief that was good a minute ago is worth more than the difference:

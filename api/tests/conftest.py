@@ -1,8 +1,10 @@
 import os
 from collections.abc import AsyncIterator, Iterator
+from urllib.parse import urlparse
 
 import pytest
 import pytest_asyncio
+from procrastinate import PsycopgConnector
 from procrastinate.testing import InMemoryConnector
 from sqlalchemy import delete
 
@@ -33,26 +35,35 @@ def memory_jobs() -> Iterator[InMemoryConnector]:
 
 @pytest_asyncio.fixture
 async def clean_database() -> AsyncIterator[None]:
-    if not os.environ.get("CEREBRO_DATABASE_URL"):
-        pytest.skip("requires CEREBRO_DATABASE_URL and an Alembic-upgraded PostgreSQL")
+    test_url = os.environ.get("CEREBRO_TEST_DATABASE_URL")
+    if not test_url:
+        pytest.skip("requires a disposable CEREBRO_TEST_DATABASE_URL")
+    if not urlparse(test_url).path.rstrip("/").endswith("_test"):
+        pytest.fail("destructive fixtures require a database name ending in _test")
+    patch = pytest.MonkeyPatch()
+    patch.setenv("CEREBRO_DATABASE_URL", test_url)
     get_config.cache_clear()
     await dispose_engine()
-    async with open_session() as session:
-        for model in (
-            RuntimeHeartbeat,
-            Feedback,
-            SlackOutput,
-            ToolCall,
-            AgentRun,
-            Message,
-            Conversation,
-            SlackEvent,
-        ):
-            await session.execute(delete(model))
-        await session.commit()
-    yield
-    set_agent_runner(FakeAgentRunner())
-    set_slack_gateway(None)
-    set_slack_file_client(None)
-    get_config.cache_clear()
-    await dispose_engine()
+    try:
+        with job_app.replace_connector(PsycopgConnector(conninfo=test_url)):
+            async with open_session() as session:
+                for model in (
+                    RuntimeHeartbeat,
+                    Feedback,
+                    SlackOutput,
+                    ToolCall,
+                    AgentRun,
+                    Message,
+                    Conversation,
+                    SlackEvent,
+                ):
+                    await session.execute(delete(model))
+                await session.commit()
+            yield
+    finally:
+        patch.undo()
+        set_agent_runner(FakeAgentRunner())
+        set_slack_gateway(None)
+        set_slack_file_client(None)
+        get_config.cache_clear()
+        await dispose_engine()

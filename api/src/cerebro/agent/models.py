@@ -37,6 +37,7 @@ class EvidenceKind(StrEnum):
     EMAIL = "email"
     PHONE = "phone"
     VAMBE_CONTEXT = "vambe_context"
+    VAMBE_MENTION = "vambe_mention"
     IDENTITY_CONFLICT = "identity_conflict"
     AMOUNT_EXCEEDS_OUTSTANDING = "amount_exceeds_outstanding"
     CURRENCY_MISMATCH = "currency_mismatch"

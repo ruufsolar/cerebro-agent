@@ -15,7 +15,6 @@ async def test_health_reports_agents_sdk_service() -> None:
         "service": "cerebro-agent",
         "version": "0.1.0",
         "environment": "local",
-        "phase": "payment-identification-pilot",
     }
 
 

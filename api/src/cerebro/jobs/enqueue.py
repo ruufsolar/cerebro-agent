@@ -33,6 +33,7 @@ async def enqueue_slack_output(output_id: UUID) -> bool:
         await app.configure_task(
             "cerebro.jobs.tasks.deliver_slack_output",
             queueing_lock=f"slack-output:{output_id}",
+            lock=f"slack-output:{output_id}",
         ).defer_async(output_id=str(output_id))
     except AlreadyEnqueued:
         return False

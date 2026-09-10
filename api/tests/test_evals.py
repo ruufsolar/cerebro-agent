@@ -1,5 +1,18 @@
 from cerebro.agent.models import RequestKind
 from cerebro.evals.corpus import load_corpus
+from cerebro.evals.run import has_hard_failures
+
+
+def test_routing_and_format_errors_cannot_hide_in_aggregate_score() -> None:
+    for error in (
+        "route:general",
+        "format:too_verbose",
+        "unsupported:evidence_reference",
+        "claims:forbidden",
+        "tools:forbidden_present",
+    ):
+        assert has_hard_failures([error])
+    assert not has_hard_failures(["outcome:ambiguous"])
 
 
 def test_synthetic_eval_corpus_is_versioned_and_representative() -> None:

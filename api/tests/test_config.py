@@ -1,12 +1,23 @@
 from cerebro.config import AppConfig, GlobalMode, ReadinessProfile
 
 
+def test_review_is_compatible_alias_for_enabled() -> None:
+    assert AppConfig(global_mode=GlobalMode("review")).global_mode is GlobalMode.ENABLED
+    assert GlobalMode("enabled") is GlobalMode.ENABLED
+
+
+def test_retired_modes_are_not_silently_enabled() -> None:
+    import pytest
+
+    for value in ("shadow", "apply"):
+        with pytest.raises(ValueError, match="retired"):
+            AppConfig.model_validate({"global_mode": value})
+
+
 def test_config_is_safe_by_default() -> None:
     config = AppConfig()
 
     assert config.global_mode is GlobalMode.OFF
-    assert config.payment_writes_enabled is False
-    assert config.hold_writes_enabled is False
     assert config.external_tracing_enabled is False
     assert config.live_agent_ready is False
     assert config.azure_agent_ready is False

@@ -7,8 +7,7 @@
   not in this repository. `remember` what you work out when you are done — one thing per
   call, never a client's name, RUT, phone or email. `.claude/skills/agent-memory/SKILL.md`
   has the longer version; the tools need `RUUF_AGENTS_TOKEN` in your environment.
-- Read `docs/README.md`, `docs/product/current-state.md`, and
-  `docs/product/capability-matrix.md`.
+- Read `README.md`, `docs/product.md`, and the relevant topical guide.
 - Read the ADRs relevant to the area you are changing. Architectural decisions must be
   changed by adding a superseding ADR, not by silently editing history.
 - Read `knowledge/data-scope.yaml` before touching monolith data access.
@@ -23,14 +22,14 @@
 - The operational read replica is read-only. Never run DDL/DML, call stored procedures, or
   use it for future writes.
 - Business writes (payment association and holds) are out of scope until a dedicated,
-  approval-gated monolith API exists. Both hard switches default to false.
+  approval-gated monolith API exists. No placeholder write switches or tools exist.
 - Preserve uncertainty. The difficult first-transfer case can correctly end in “no sé”.
 - Bank ingestion is the eventual source of truth and trigger; V0 Slack mentions are a
   temporary manual trigger.
 - External model tracing with customer content stays disabled. Never log secrets, raw
   screenshots, or unrestricted query results.
-- Keep `docs/product/current-state.md` and the capability matrix accurate in the same PR as
-  a capability change.
+- Keep `docs/product.md` accurate in the same PR as a capability change. Avoid duplicating
+  current-state summaries in several guides. ADR-012 supersedes the old rollout modes.
 
 ## Development
 

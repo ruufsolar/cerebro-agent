@@ -2,10 +2,19 @@ import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
+from procrastinate.jobs import Status as JobStatus
 from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert
 
-from cerebro.db.enums import DeliveryStatus, RunStatus, SlackEventDisposition
-from cerebro.db.models import AgentRun, RuntimeHeartbeat, SlackEvent, SlackOutput
+from cerebro.config import GlobalMode, get_config
+from cerebro.db.enums import (
+    ConversationState,
+    DeliveryStatus,
+    RunStatus,
+    SlackEventDisposition,
+    SlackOutputKind,
+)
+from cerebro.db.models import AgentRun, Conversation, RuntimeHeartbeat, SlackEvent, SlackOutput
 from cerebro.db.session import open_session
 from cerebro.jobs.app import app
 from cerebro.jobs.enqueue import enqueue_agent_run, enqueue_slack_event, enqueue_slack_output
@@ -14,11 +23,6 @@ from cerebro.slack.pipeline import deliver_output, execute_run
 from cerebro.slack.service import process_stored_event
 
 logger = logging.getLogger(__name__)
-
-
-@app.task(name="cerebro.jobs.tasks.foundation_noop", queue="control")
-async def foundation_noop() -> None:
-    log_event(logger, "worker_operational", queue="control")
 
 
 @app.task(name="cerebro.jobs.tasks.process_slack_event", queue="control")
@@ -41,6 +45,7 @@ async def deliver_slack_output(output_id: str) -> None:
 async def recover_pending_work(timestamp: int) -> None:
     """Close commit/enqueue gaps after a crash. Queue locks make this safe to repeat."""
     del timestamp
+    await recover_interrupted_jobs()
     async with open_session() as session:
         events = list(
             (
@@ -79,6 +84,50 @@ async def recover_pending_work(timestamp: int) -> None:
             recovered_runs=len(runs),
             recovered_outputs=len(outputs),
         )
+
+
+async def recover_interrupted_jobs() -> None:
+    """Release dead-worker locks; never replay an investigation's memory side effects."""
+    stalled = await app.job_manager.get_stalled_jobs(seconds_since_heartbeat=60)
+    for job in stalled:
+        if not job.task_name.startswith("cerebro.jobs.tasks.") or job.id is None:
+            continue
+        if job.task_name == "cerebro.jobs.tasks.execute_agent_run":
+            async with open_session() as session:
+                run = await session.get(
+                    AgentRun, UUID(str(job.task_kwargs["run_id"])), with_for_update=True
+                )
+                if run and run.status == RunStatus.RUNNING:
+                    run.status = RunStatus.FAILED
+                    run.error_code = "worker_interrupted"
+                    run.error_detail = "worker_heartbeat_expired"
+                    run.finished_at = datetime.now(UTC)
+                    conversation = await session.get(Conversation, run.conversation_id)
+                    if conversation:
+                        conversation.state = ConversationState.FAILED
+                        if get_config().global_mode == GlobalMode.ENABLED:
+                            await session.execute(
+                                insert(SlackOutput)
+                                .values(
+                                    conversation_id=conversation.id,
+                                    agent_run_id=run.id,
+                                    slack_channel_id=conversation.slack_channel_id,
+                                    slack_thread_ts=conversation.slack_thread_ts,
+                                    idempotency_key=f"agent-run:{run.id}:error",
+                                    body=(
+                                        "La respuesta se interrumpió. "
+                                        "Puedes pedirme que lo intente de nuevo."
+                                    ),
+                                    kind=SlackOutputKind.ERROR,
+                                    status=DeliveryStatus.PENDING,
+                                )
+                                .on_conflict_do_nothing(
+                                    index_elements=[SlackOutput.idempotency_key]
+                                )
+                            )
+                    await session.commit()
+        # Finalize only after domain state is committed: another recovery closes either gap.
+        await app.job_manager.finish_job_by_id_async(job.id, JobStatus.FAILED, delete_job=False)
 
 
 @app.periodic(cron="*/5 * * * *", periodic_id="operational-watchdog")

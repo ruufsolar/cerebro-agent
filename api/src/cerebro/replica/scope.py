@@ -1,4 +1,3 @@
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -80,8 +79,3 @@ def load_knowledge(knowledge_dir: str | Path) -> KnowledgeBundle:
         scope=DataScope.model_validate(scope_data),
         catalog=SchemaCatalog.model_validate(catalog_data),
     )
-
-
-@lru_cache(maxsize=8)
-def cached_knowledge(knowledge_dir: str) -> KnowledgeBundle:
-    return load_knowledge(knowledge_dir)

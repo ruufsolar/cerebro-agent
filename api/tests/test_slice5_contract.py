@@ -9,6 +9,24 @@ from cerebro.agent.runner import AgentRunResult, GeneralAgentRunResult, ImageIng
 from cerebro.slack.pipeline import render_general_answer, render_identification
 
 
+def test_payment_renderer_keeps_whole_sentences_and_image_notice() -> None:
+    summary = "La identidad coincide. " + " ".join(["explicación"] * 90) + "."
+    rendered = render_identification(
+        AgentRunResult(
+            identification=PaymentIdentification(
+                confidence=Confidence.UNKNOWN,
+                investigation_summary=summary,
+                unable_to_verify=["cliente", "cuenta", "contexto", "fecha"],
+            )
+        ),
+        ImageIngestion(requested=2, downloaded=1, rejected=1),
+    )
+    assert "*Por qué:* La identidad coincide." in rendered
+    assert "explicación" not in rendered
+    assert "1/2 capturas no procesadas" in rendered
+    assert "…" not in rendered
+
+
 def _customer(name: str = "Cliente Sintético") -> CustomerCandidate:
     return CustomerCandidate(
         customer_name=name,

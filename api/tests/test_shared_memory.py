@@ -90,6 +90,16 @@ def _age(seconds: float) -> None:
 
 
 class TestWithoutTheStore:
+    async def test_invalid_json_does_not_break_general_replies(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            shared_memory,
+            "client",
+            lambda: _client(lambda request: httpx.Response(200, text="not JSON")),
+        )
+        assert await shared_memory.load() is None
+
     async def test_no_configuration_means_no_block_and_no_tool(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

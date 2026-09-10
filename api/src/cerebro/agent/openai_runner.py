@@ -311,8 +311,10 @@ class OpenAIAgentsRunner:
         *,
         data: InvestigationData | None = None,
         client: AsyncOpenAI | None = None,
+        shared_memory_enabled: bool = True,
     ) -> None:
         self.config = config
+        self.shared_memory_enabled = shared_memory_enabled
         self.data = data or EmptyInvestigationData()
         self.client = client or AsyncOpenAI(
             base_url=normalize_azure_base_url(config.azure_openai_endpoint),
@@ -375,7 +377,7 @@ class OpenAIAgentsRunner:
         agents read is a second thing to reason about in the middle of that, for
         no benefit. Ops teach Cerebro in conversation, which is this flow.
         """
-        if shared_memory.client() is None:
+        if not self.shared_memory_enabled or shared_memory.client() is None:
             return []
 
         @function_tool(failure_error_function=None)
@@ -1023,7 +1025,7 @@ class OpenAIAgentsRunner:
                     # Above the prompt rather than inside it, and only here: the
                     # payment flow answers under a versioned policy and gains
                     # nothing from what ops said in another thread last week.
-                    memory = await shared_memory.load()
+                    memory = await shared_memory.load() if self.shared_memory_enabled else None
                     if memory is not None:
                         general_instructions = f"{memory.text}\n\n{general_instructions}"
                         general_knowledge = f"{general_knowledge}+{memory.version}"
@@ -1094,6 +1096,8 @@ def build_agent_runner(config: AppConfig | None = None) -> AgentRunner:
             "CEREBRO_AZURE_OPENAI_ENDPOINT and CEREBRO_AZURE_OPENAI_API_KEY must be set together"
         )
     if not config.azure_openai_endpoint and not config.azure_openai_api_key:
+        if config.environment not in {"local", "test"}:
+            raise ValueError("Azure credentials required outside local/test; fake runner disabled")
         return FakeAgentRunner()
     if not config.azure_deployment_main:
         raise ValueError("CEREBRO_AZURE_DEPLOYMENT_MAIN is required for the Azure agent")

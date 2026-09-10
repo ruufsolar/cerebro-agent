@@ -1,10 +1,11 @@
-"""Evaluate the controlled ten-case FinOps Slack pilot from durable metadata."""
+"""Feedback quality reporting; the legacy pilot command keeps its original defaults."""
 
 import argparse
 import asyncio
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from math import ceil
 from statistics import mean, median
 from typing import Any
 
@@ -23,7 +24,6 @@ from cerebro.ops.metrics import nearest_rank
 
 EXPECTED_CASES = 10
 MIN_IMAGE_CASES = 4
-MIN_POSITIVE = 9
 MAX_MEDIAN_SECONDS = 60
 MAX_P95_SECONDS = 120
 MAX_AVERAGE_INPUT_TOKENS = 50_000
@@ -39,12 +39,28 @@ _SOURCE_TO_TOOL = {
 
 
 @dataclass(frozen=True)
+class QualityPolicy:
+    expected_cases: int | None = EXPECTED_CASES
+    min_image_cases: int = MIN_IMAGE_CASES
+    min_positive_rate: float = 0.9
+
+    def __post_init__(self) -> None:
+        if self.expected_cases is not None and self.expected_cases < 1:
+            raise ValueError("sample size must be positive")
+        if self.min_image_cases < 0 or not 0 <= self.min_positive_rate <= 1:
+            raise ValueError("invalid quality thresholds")
+
+
+@dataclass(frozen=True)
 class PilotRow:
     run: AgentRun
     trigger: Message
     outputs: list[SlackOutput]
     feedback: list[Feedback]
     tools: list[ToolCall]
+
+
+DEFAULT_POLICY = QualityPolicy()
 
 
 def _parse_datetime(value: str) -> datetime:
@@ -159,7 +175,7 @@ async def _load_rows(channel: str, since: datetime, until: datetime) -> list[Pil
         return rows
 
 
-def grade_rows(rows: list[PilotRow]) -> dict[str, Any]:
+def grade_rows(rows: list[PilotRow], policy: QualityPolicy = DEFAULT_POLICY) -> dict[str, Any]:
     rows = [
         row for row in rows if row.run.request_kind in {None, RequestKind.PAYMENT_IDENTIFICATION}
     ]
@@ -235,11 +251,12 @@ def grade_rows(rows: list[PilotRow]) -> dict[str, Any]:
         )
 
     aggregate_errors: list[str] = []
-    if len(rows) != EXPECTED_CASES:
+    expected_cases = policy.expected_cases if policy.expected_cases is not None else len(rows)
+    if not rows or len(rows) != expected_cases:
         aggregate_errors.append("case_count")
-    if image_cases < MIN_IMAGE_CASES:
+    if image_cases < policy.min_image_cases:
         aggregate_errors.append("image_case_count")
-    if positive < MIN_POSITIVE:
+    if positive < ceil(policy.min_positive_rate * expected_cases):
         aggregate_errors.append("positive_case_count")
     if negative_high:
         aggregate_errors.append("negative_high_confidence")
@@ -248,17 +265,17 @@ def grade_rows(rows: list[PilotRow]) -> dict[str, Any]:
     p95_latency = nearest_rank(latencies, 0.95)
     average_input = mean(input_tokens) if input_tokens else None
     average_output = mean(output_tokens) if output_tokens else None
-    if len(latencies) != EXPECTED_CASES:
+    if len(latencies) != expected_cases:
         aggregate_errors.append("latency_missing")
     elif median_latency is not None and median_latency > MAX_MEDIAN_SECONDS:
         aggregate_errors.append("median_latency")
     if p95_latency is None or p95_latency > MAX_P95_SECONDS:
         aggregate_errors.append("p95_latency")
-    if len(input_tokens) != EXPECTED_CASES or average_input is None:
+    if len(input_tokens) != expected_cases or average_input is None:
         aggregate_errors.append("input_usage_missing")
     elif average_input > MAX_AVERAGE_INPUT_TOKENS:
         aggregate_errors.append("average_input_tokens")
-    if len(output_tokens) != EXPECTED_CASES or average_output is None:
+    if len(output_tokens) != expected_cases or average_output is None:
         aggregate_errors.append("output_usage_missing")
     elif average_output > MAX_AVERAGE_OUTPUT_TOKENS:
         aggregate_errors.append("average_output_tokens")
@@ -274,6 +291,11 @@ def grade_rows(rows: list[PilotRow]) -> dict[str, Any]:
     models = versions["models"]
     return {
         "passed": passed,
+        "policy": {
+            "expected_cases": policy.expected_cases,
+            "min_image_cases": policy.min_image_cases,
+            "min_positive_rate": policy.min_positive_rate,
+        },
         "score": f"{positive}/{len(rows)}",
         "case_count": len(rows),
         "positive_cases": positive,
@@ -298,12 +320,16 @@ def grade_rows(rows: list[PilotRow]) -> dict[str, Any]:
     }
 
 
-async def run_gate(channel: str, since: datetime, until: datetime) -> dict[str, Any]:
-    return grade_rows(await _load_rows(channel, since, until))
+async def run_gate(
+    channel: str, since: datetime, until: datetime, policy: QualityPolicy = DEFAULT_POLICY
+) -> dict[str, Any]:
+    if since > until:
+        raise ValueError("since must be before until")
+    return grade_rows(await _load_rows(channel, since, until), policy)
 
 
 def _print_human(report: dict[str, Any]) -> None:
-    print(f"pilot_gate={'pass' if report['passed'] else 'fail'}")
+    print(f"quality_report={'pass' if report['passed'] else 'fail'}")
     print(
         f"cases={report['case_count']} score={report['score']} "
         f"images={report['image_cases']} negative_high={report['negative_high_confidence']}"
@@ -325,7 +351,10 @@ async def _run(args: argparse.Namespace) -> int:
     try:
         try:
             report = await run_gate(
-                args.channel, _parse_datetime(args.since), _parse_datetime(args.until)
+                args.channel,
+                _parse_datetime(args.since),
+                _parse_datetime(args.until),
+                QualityPolicy(args.sample_size, args.min_image_cases, args.min_positive_rate),
             )
         except ValueError:
             raise
@@ -345,7 +374,7 @@ async def _run(args: argparse.Namespace) -> int:
         await dispose_engine()
 
 
-def main() -> None:
+def main(*, flexible: bool = False) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--channel", required=True)
     parser.add_argument("--since", required=True, help="ISO-8601 timestamp with timezone")
@@ -353,6 +382,9 @@ def main() -> None:
         "--until", default=datetime.now(UTC).isoformat(), help="ISO-8601 timestamp with timezone"
     )
     parser.add_argument("--json", action="store_true", dest="json_output")
+    parser.add_argument("--sample-size", type=int, default=None if flexible else EXPECTED_CASES)
+    parser.add_argument("--min-image-cases", type=int, default=0 if flexible else MIN_IMAGE_CASES)
+    parser.add_argument("--min-positive-rate", type=float, default=0.9)
     args = parser.parse_args()
     try:
         code = asyncio.run(_run(args))

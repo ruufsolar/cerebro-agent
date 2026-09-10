@@ -102,7 +102,7 @@ async def _bank_ingestion_check(config: AppConfig) -> str:
 
 
 async def _provider_check(config: AppConfig) -> str:
-    runner = OpenAIAgentsRunner(config, data=EmptyInvestigationData())
+    runner = OpenAIAgentsRunner(config, data=EmptyInvestigationData(), shared_memory_enabled=False)
     now = datetime.now(UTC)
     try:
         await runner.run(

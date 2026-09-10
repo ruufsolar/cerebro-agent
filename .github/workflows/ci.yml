@@ -27,6 +27,7 @@ jobs:
           --health-retries 10
     env:
       CEREBRO_DATABASE_URL: postgresql://cerebro@127.0.0.1:5432/cerebro_test
+      CEREBRO_TEST_DATABASE_URL: postgresql://cerebro@127.0.0.1:5432/cerebro_test
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v7

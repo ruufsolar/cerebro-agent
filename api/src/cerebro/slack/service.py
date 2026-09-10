@@ -206,11 +206,7 @@ async def _process_reaction(session: AsyncSession, event: SlackEvent) -> UUID | 
         if existing:
             existing.is_active = False
     output_id: UUID | None = None
-    if (
-        added
-        and reaction == "electric_plug"
-        and get_config().global_mode in {GlobalMode.REVIEW, GlobalMode.APPLY}
-    ):
+    if added and reaction == "electric_plug" and get_config().global_mode == GlobalMode.ENABLED:
         flavor_statement = (
             insert(SlackOutput)
             .values(
@@ -254,6 +250,11 @@ async def process_stored_event(event_id: UUID) -> None:
                 SlackEventDisposition.PROCESSED,
                 SlackEventDisposition.IGNORED,
             }:
+                return
+            if get_config().global_mode == GlobalMode.OFF:
+                event.disposition = SlackEventDisposition.IGNORED
+                event.processed_at = datetime.now(UTC)
+                await session.commit()
                 return
             if event.event_type in {"app_mention", "message"}:
                 run_to_enqueue = await _process_message(session, event)
